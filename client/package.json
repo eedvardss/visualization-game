@@ -1,0 +1,17 @@
+{
+  "name": "music-drift-client",
+  "version": "1.0.0",
+  "description": "Client for Music Drift Arena",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "three": "^0.160.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
