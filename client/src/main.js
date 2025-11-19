@@ -7,6 +7,7 @@ import { Car } from './car.js';
 import { Network } from './network.js';
 import { AudioPreprocessor } from './audio/AudioPreprocessor.js';
 import { LobbyUI } from './ui/LobbyUI.js';
+import { ReccoBeatsClient } from './audio/ReccoBeatsClient.js';
 
 async function init() {
     // ===========================
@@ -38,7 +39,9 @@ async function init() {
     const graphics = new Graphics();
     // Enable fog with a BRIGHT INDIGO color
     // Density 0.01: Lighter, more breathable, but still atmospheric.
-    graphics.scene.fog = new THREE.FogExp2(0x4b0082, 0.01);
+    // Enable fog with a RICH PURPLE color to match nebula glow
+    // Density 0.008: Stronger fog, but colored to blend with the sky (no black circle)
+    graphics.scene.fog = new THREE.FogExp2(0x2d1b4e, 0.008);
 
     // ===========================
     // TRACK GENERATION
@@ -62,13 +65,20 @@ async function init() {
     let audioStartTime = 0;
     let lastAudioTime = 0;
 
+    const reccoClient = new ReccoBeatsClient();
+
     async function loadMusic(songName) {
         try {
+            // 1. Load for AudioContext (ArrayBuffer)
             const result = await audioPreprocessor.load(`/assets/music/${songName}`);
             const analysis = audioPreprocessor.analyze(result);
             audioBuffer = analysis.buffer;
             audioTimeline = analysis.timeline;
             console.log(`Audio ready: ${songName}`);
+
+            // 2. Fetch as Blob for ReccoBeats API
+            // (We need to fetch again or convert buffer, fetching is easier for now)
+            fetch(`/assets/music/${songName}`)
         } catch (e) {
             console.error('Failed to load audio:', e);
         }
@@ -219,6 +229,7 @@ async function init() {
 
         let currentAudioData = { timelineEvent: null, realtimeEnergy: 0 };
 
+        // AUDIO ANALYSIS
         if (audioSource && audioTimeline && gameState === 'PLAYING') {
             const currentAudioTime = audioPreprocessor.audioContext.currentTime - audioStartTime;
 
@@ -234,13 +245,11 @@ async function init() {
             }
 
             // 2. Check Timeline Events (Range Check)
-            // Find events that happened between last frame and now
             const events = audioTimeline.filter(e =>
                 e.time > lastAudioTime && e.time <= currentAudioTime
             );
 
             if (events.length > 0) {
-                // Prioritize 'beat' events, or take the last one
                 const beat = events.find(e => e.type === 'beat');
                 currentAudioData.timelineEvent = beat || events[events.length - 1];
             }
@@ -248,14 +257,41 @@ async function init() {
             lastAudioTime = currentAudioTime;
         }
 
+        // ===========================
+        // REAL-TIME REACTIVITY (SMOOTH)
+        // ===========================
+        if (graphics.baseFogDensity) {
+            // 1. DYNAMIC FOG DENSITY
+            const targetDensity = graphics.baseFogDensity + currentAudioData.realtimeEnergy * 0.005;
+            graphics.scene.fog.density = THREE.MathUtils.lerp(graphics.scene.fog.density, targetDensity, 0.1);
+
+            // 2. SMOOTH COLOR PULSE (Anti-Epilepsy)
+            if (currentAudioData.timelineEvent && currentAudioData.timelineEvent.type === 'beat') {
+                graphics.pulseIntensity = 0.6;
+            } else {
+                graphics.pulseIntensity = THREE.MathUtils.lerp(graphics.pulseIntensity || 0, 0, 0.05);
+            }
+
+            // Apply pulse to color
+            const pulseColor = graphics.baseFogColor.clone().offsetHSL(0, 0, graphics.pulseIntensity * 0.15);
+            graphics.scene.fog.color.copy(pulseColor);
+        }
+
+        // 3. CAMERA SHAKE
+        let shake = new THREE.Vector3();
+        if (currentAudioData.timelineEvent && currentAudioData.timelineEvent.type === 'beat') {
+            shake.set(
+                (Math.random() - 0.5) * 0.5,
+                (Math.random() - 0.5) * 0.5,
+                (Math.random() - 0.5) * 0.5
+            );
+        }
+
         trackEffects.update(time, currentAudioData);
         nebula.update(time, currentAudioData);
 
         // LOCAL CAR
         if (localCar) {
-            // Debug log every 60 frames
-            if (Math.random() < 0.01) console.log('DEBUG: Updating Local Car', { dt, hasCurve: !!trackCurve, hasFrames: !!frenetFrames });
-
             localCar.update(dt, { trackCurve, frames: frenetFrames, canMove: true });
 
             // Camera Chase
@@ -272,7 +308,7 @@ async function init() {
                 offset.y += camLat * 5;
             }
 
-            const idealPos = carPos.clone().add(offset);
+            const idealPos = carPos.clone().add(offset).add(shake);
             const idealLook = carPos.clone().add(new THREE.Vector3(0, 2, 0));
 
             graphics.camera.position.lerp(idealPos, dt * 5.0);

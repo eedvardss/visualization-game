@@ -27,18 +27,43 @@ export class Car {
                 });
 
                 this.mesh.add(model);
-                this.model = model;
 
-                // Try to find wheels by name (optional)
-                this.wheels = {
-                    fl: model.getObjectByName('Wheel_FL'),
-                    fr: model.getObjectByName('Wheel_FR'),
-                    rl: model.getObjectByName('Wheel_RL'),
-                    rr: model.getObjectByName('Wheel_RR'),
-                };
-                this.hasWheels =
-                    this.wheels.fl && this.wheels.fr &&
-                    this.wheels.rl && this.wheels.rr;
+                // SMART WHEEL DETECTION
+                const potentialWheels = [];
+                model.traverse((child) => {
+                    if (child.isMesh && (child.name.toLowerCase().includes('wheel') || child.name.toLowerCase().includes('tire'))) {
+                        potentialWheels.push(child);
+                    }
+                });
+
+                if (potentialWheels.length >= 4) {
+                    // Sort by Z (Front/Rear) then X (Left/Right)
+                    // Assuming -Z is forward (standard GLTF)
+                    // Front = Min Z, Rear = Max Z
+                    // Left = Positive X, Right = Negative X (or vice versa)
+
+                    // Sort by Z
+                    potentialWheels.sort((a, b) => a.getWorldPosition(new THREE.Vector3()).z - b.getWorldPosition(new THREE.Vector3()).z);
+
+                    const front = potentialWheels.slice(0, 2); // Fronts are usually lower Z (negative)
+                    const rear = potentialWheels.slice(2, 4);  // Rears are higher Z
+
+                    // Sort Left/Right by X
+                    front.sort((a, b) => b.getWorldPosition(new THREE.Vector3()).x - a.getWorldPosition(new THREE.Vector3()).x);
+                    rear.sort((a, b) => b.getWorldPosition(new THREE.Vector3()).x - a.getWorldPosition(new THREE.Vector3()).x);
+
+                    this.wheels = {
+                        fl: front[0], // Left is usually +X
+                        fr: front[1], // Right is usually -X
+                        rl: rear[0],
+                        rr: rear[1]
+                    };
+                    this.hasWheels = true;
+                    console.log('Wheels found and assigned:', this.wheels);
+                } else {
+                    console.warn('Could not auto-detect wheels. Found:', potentialWheels.map(w => w.name));
+                    this.hasWheels = false;
+                }
             },
             undefined,
             (err) => {
@@ -316,7 +341,7 @@ export class Car {
         const pos = centerPoint
             .clone()
             .add(normal.clone().multiplyScalar(this.lateralOffset))
-            .add(upVector.clone().multiplyScalar(0.9));
+            .add(upVector.clone().multiplyScalar(0.35)); // Fix: Lowered from 0.9 to 0.35
 
         this.mesh.position.copy(pos);
 
@@ -458,7 +483,8 @@ export class Car {
     // NITRO FLAMES + SPARKS
     //-----------------------------------
     spawnNitroFlamesAndSparks(carPos, forwardDir, up) {
-        const backOffset = forwardDir.clone().multiplyScalar(-1.5);
+        // Fix: Move further back (was -1.5) to avoid spawning inside the car mesh
+        const backOffset = forwardDir.clone().multiplyScalar(-3.5);
         const base = carPos.clone()
             .add(backOffset)
             .add(up.clone().multiplyScalar(0.3));

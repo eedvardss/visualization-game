@@ -66,7 +66,7 @@ export class TrackGenerator {
         const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
         geometry.computeVertexNormals();
 
-        // ======== 4. SMOOTH NEON RAINBOW SHADER ==========================
+        // ======== 4. TEXTURED NEON RAINBOW SHADER ==========================
 
         const vertexShader = `
             varying vec2 vUv;
@@ -90,14 +90,16 @@ export class TrackGenerator {
                 return a + b*cos( 6.28318*(c*t+d) );
             }
 
+            // Simple pseudo-random noise
+            float random(vec2 st) {
+                return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
+            }
+
             void main() {
-                // Scale: 0.005
-                // It seems vUv.x maps to world distance (~1000 units total).
-                // 0.005 * 1000 = 5.0 full rainbow cycles around the track.
-                // This will create HUGE, wide bands of color.
+                // 1. RAINBOW BASE
+                // Scale: 0.005 for massive wide bands
                 float t = uTime * 0.2 + vUv.x * 0.005; 
 
-                // Standard Vibrant Palette
                 vec3 a = vec3(0.5, 0.5, 0.5);
                 vec3 b = vec3(0.5, 0.5, 0.5);
                 vec3 c = vec3(1.0, 1.0, 1.0);
@@ -105,10 +107,21 @@ export class TrackGenerator {
 
                 vec3 color = palette(t, a, b, c, d);
 
-                // Brightness Control (0.6 to avoid white blowout)
+                // 2. ASPHALT TEXTURE
+                // High frequency noise
+                float noise = random(vUv * 500.0); // 500x repeat for fine grain
+                
+                // Mix noise into color
+                // We darken the color slightly where noise is low to create "grit"
+                // Range: 0.7 to 1.0
+                float textureIntensity = 0.7 + 0.3 * noise;
+                color *= textureIntensity;
+
+                // 3. BRIGHTNESS CONTROL
+                // Base brightness 0.6 (glowing but visible color)
                 color *= 0.6;
 
-                // Beat pulse
+                // 4. BEAT PULSE
                 color += uBeat * 0.2;
 
                 gl_FragColor = vec4(color, 1.0);

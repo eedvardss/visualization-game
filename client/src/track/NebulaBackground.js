@@ -131,8 +131,8 @@ export class NebulaBackground {
                 vec3 coord = vWorldPosition * 0.0015; // Larger scale clouds
                 float time = uTime * 0.05;
                 
-                // Beat distortion
-                coord.y += uBeat * 0.1 * sin(coord.x * 5.0 + time * 2.0);
+                // Beat distortion - REMOVED (User disliked it)
+                // coord.y += uBeat * 0.1 * sin(coord.x * 5.0 + time * 2.0);
                 
                 // Layered Noise
                 float n1 = fbm(coord + vec3(time, time * 0.3, 0.0));
@@ -148,12 +148,17 @@ export class NebulaBackground {
                 vec3 highlight = mix(uColor2, uColor3, n2 + uEnergy);
                 color = mix(color, highlight, n1 * (0.4 + uEnergy * 0.6));
                 
-                // Pulse Brightness
-                color *= (0.8 + uBeat * 0.4);
+                // Pulse Brightness & Color Shift on Beat
+                // Flashes bright purple/cyan on the beat
+                vec3 beatColor = vec3(0.4, 0.2, 0.8); 
+                color += beatColor * uBeat * 0.5;
                 
-                // Fog fade at bottom
-                float fog = smoothstep(-100.0, 100.0, vWorldPosition.y);
-                color = mix(color, vec3(0.0), 1.0 - fog); 
+                // Overall brightness pulse
+                color *= (0.8 + uBeat * 0.2);
+                
+                // Fog fade at bottom - REMOVED to allow full 360 nebula
+                // float fog = smoothstep(-100.0, 100.0, vWorldPosition.y);
+                // color = mix(color, vec3(0.0), 1.0 - fog); 
                 
                 gl_FragColor = vec4(color, 1.0);
             }
@@ -164,10 +169,11 @@ export class NebulaBackground {
             vertexShader: vertexShader,
             fragmentShader: fragmentShader,
             side: THREE.BackSide,
-            depthWrite: false
+            depthWrite: false,
+            // fog: true // Default is true. We want fog to blend the distant nebula.
         });
 
-        const geometry = new THREE.SphereGeometry(900, 64, 64);
+        const geometry = new THREE.SphereGeometry(2000, 64, 64); // Keep large size
         this.mesh = new THREE.Mesh(geometry, material);
         this.scene.add(this.mesh);
     }
@@ -180,7 +186,7 @@ export class NebulaBackground {
 
         for (let i = 0; i < count; i++) {
             positions.push(THREE.MathUtils.randFloatSpread(1500));
-            positions.push(THREE.MathUtils.randFloatSpread(800) + 200); // Keep mostly in sky
+            positions.push(THREE.MathUtils.randFloatSpread(1500)); // Full height range (was biased up)
             positions.push(THREE.MathUtils.randFloatSpread(1500));
             speeds.push(Math.random());
         }
@@ -200,17 +206,30 @@ export class NebulaBackground {
         this.scene.add(this.dust);
     }
 
+    setColors(c1, c2, c3) {
+        // Smoothly transition to new colors
+        // (For now, direct set is fine as this happens once per song load)
+        this.uniforms.uColor1.value.copy(c1);
+        this.uniforms.uColor2.value.copy(c2);
+        this.uniforms.uColor3.value.copy(c3);
+    }
+
     update(time, audioData) {
         this.uniforms.uTime.value = time;
 
-        // INSTANT ATTACK, SLOW DECAY for sharp beat hits
+        // SMOOTH PULSE (Anti-Epilepsy)
+        // Instead of jumping to 1.0, we target 1.0 and lerp there
+        // But for a beat, we kind of need a jump. 
+        // We'll reduce the max intensity and use a softer decay.
+
         if (audioData.timelineEvent && audioData.timelineEvent.type === 'beat') {
-            this.uniforms.uBeat.value = 1.0;
+            // Jump to 0.6 instead of 1.0 for softer pulse
+            this.uniforms.uBeat.value = 0.6;
         } else {
             this.uniforms.uBeat.value = THREE.MathUtils.lerp(
                 this.uniforms.uBeat.value,
                 0.0,
-                0.05 // Slow decay
+                0.03 // Slower decay = smoother
             );
         }
 
@@ -218,7 +237,7 @@ export class NebulaBackground {
         this.uniforms.uEnergy.value = THREE.MathUtils.lerp(
             this.uniforms.uEnergy.value,
             audioData.realtimeEnergy || 0,
-            0.1
+            0.05 // Slower reaction to energy for smoother look
         );
 
         // Rotate Nebula
@@ -229,8 +248,6 @@ export class NebulaBackground {
         // Animate Dust
         if (this.dust) {
             this.dust.rotation.y = time * 0.02;
-            // Pulse dust size/opacity could go here if using shader material for dust
-            // For now, simple rotation is good ambience
         }
     }
 }
