@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export class Car {
-    constructor(scene, color, isLocal = false) {
+    constructor(scene, color, isLocal = false, modelName = 'mercedes.glb') {
         this.scene = scene;
         this.isLocal = isLocal;
 
@@ -14,7 +14,7 @@ export class Car {
         //-----------------------------------
         const loader = new GLTFLoader();
         loader.load(
-            '/assets/models/mercedes.glb',
+            `/assets/models/${modelName}`,
             (gltf) => {
                 const model = gltf.scene;
                 model.scale.set(2, 2, 2);
@@ -88,9 +88,9 @@ export class Car {
             shift: false,
         };
         if (isLocal) {
-    window.addEventListener('keydown', (e) => this.onKey(e, true));
-    window.addEventListener('keyup', (e) => this.onKey(e, false));
-}
+            window.addEventListener('keydown', (e) => this.onKey(e, true));
+            window.addEventListener('keyup', (e) => this.onKey(e, false));
+        }
 
         this.driftMode = false;
 
@@ -204,8 +204,13 @@ export class Car {
     //-----------------------------------
     // MAIN UPDATE
     //-----------------------------------
-    update(dt, { trackCurve, frames, canMove = true }) {
-        if (!this.isLocal) return;
+    update(dt, context = {}) {
+        const { trackCurve, frames, canMove = true } = context;
+
+        if (!this.isLocal) {
+            this.updateRemote(dt);
+            return;
+        }
         if (!trackCurve || !frames) return;
 
         if (!this._trackLength) {
@@ -251,7 +256,7 @@ export class Car {
         //-----------------------------------
         const steerInput =
             (this.keys.a ? -1 : 0) +
-            (this.keys.d ?  1 : 0);
+            (this.keys.d ? 1 : 0);
 
         const speedFactor = THREE.MathUtils.clamp(Math.abs(this.speed) / this.MAX_SPEED, 0.1, 1.0);
         const steerMult = this.driftMode ? this.DRIFT_STEER_MULT : 1.0;
@@ -645,5 +650,14 @@ export class Car {
     setTarget(x, y, z, qx, qy, qz, qw) {
         this.mesh.position.set(x, y, z);
         this.mesh.quaternion.set(qx, qy, qz, qw);
+    }
+
+    updateRemote(dt) {
+        // Remote cars just need particle updates
+        this.updateSmoke(dt);
+        this.updateFlames(dt);
+        this.updateSparks(dt);
+        this.updateSkidmarks(dt);
+        this.updateSpeedLines(dt);
     }
 }

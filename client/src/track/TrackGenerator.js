@@ -66,13 +66,17 @@ export class TrackGenerator {
         const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
         geometry.computeVertexNormals();
 
-        // ======== 4. RAINBOW SHADER MATERIAL ==========================
+        // ======== 4. SMOOTH NEON RAINBOW SHADER ==========================
 
         const vertexShader = `
             varying vec2 vUv;
+            #include <fog_pars_vertex>
+            
             void main() {
                 vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                #include <fog_vertex>
             }
         `;
 
@@ -80,14 +84,20 @@ export class TrackGenerator {
             uniform float uTime;
             uniform float uBeat;
             varying vec2 vUv;
+            #include <fog_pars_fragment>
 
             vec3 palette( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d ) {
                 return a + b*cos( 6.28318*(c*t+d) );
             }
 
             void main() {
-                float t = uTime * 0.2 + vUv.x * 4.0;
+                // Scale: 0.005
+                // It seems vUv.x maps to world distance (~1000 units total).
+                // 0.005 * 1000 = 5.0 full rainbow cycles around the track.
+                // This will create HUGE, wide bands of color.
+                float t = uTime * 0.2 + vUv.x * 0.005; 
 
+                // Standard Vibrant Palette
                 vec3 a = vec3(0.5, 0.5, 0.5);
                 vec3 b = vec3(0.5, 0.5, 0.5);
                 vec3 c = vec3(1.0, 1.0, 1.0);
@@ -95,28 +105,27 @@ export class TrackGenerator {
 
                 vec3 color = palette(t, a, b, c, d);
 
+                // Brightness Control (0.6 to avoid white blowout)
+                color *= 0.6;
+
                 // Beat pulse
-                color += uBeat * 0.1;
-
-                // Subtle grid pattern
-                float gridX = step(0.98, fract(vUv.x * 40.0));
-                float gridY = step(0.95, fract(vUv.y * 2.0));
-                vec3 gridColor = vec3(0.0);
-
-                color = mix(color, gridColor, max(gridX, gridY) * 0.8);
+                color += uBeat * 0.2;
 
                 gl_FragColor = vec4(color, 1.0);
+                #include <fog_fragment>
             }
         `;
 
         this.material = new THREE.ShaderMaterial({
             uniforms: {
                 uTime: { value: 0 },
-                uBeat: { value: 0 }
+                uBeat: { value: 0 },
+                ...THREE.UniformsLib.fog // Include fog uniforms
             },
             vertexShader,
             fragmentShader,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            fog: true // Enable fog
         });
 
         this.mesh = new THREE.Mesh(geometry, this.material);

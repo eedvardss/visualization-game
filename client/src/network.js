@@ -4,13 +4,16 @@ export class Network {
         this.id = null;
         this.color = null;
         this.players = new Map();
+        this.songs = [];
+        this.selectedSong = null;
 
         // Callbacks
         this.onPlayerJoined = null;
         this.onPlayerLeft = null;
-        this.onGameStateChange = null; // New
-        this.onCountdown = null; // New
+        this.onGameStateChange = null;
+        this.onCountdown = null;
         this.onInit = null;
+        this.onLobbyUpdate = null; // New
     }
 
     connect() {
@@ -18,7 +21,8 @@ export class Network {
 
         this.socket.onopen = () => {
             console.log('Connected to server');
-            document.getElementById('status').innerText = 'Connected';
+            const statusEl = document.getElementById('status');
+            if (statusEl) statusEl.innerText = 'Connected';
         };
 
         this.socket.onmessage = (event) => {
@@ -27,22 +31,16 @@ export class Network {
             switch (data.type) {
                 case 'init':
                     this.id = data.id;
-                    this.color = data.color;
-                    data.players.forEach(p => {
-                        if (p.id !== this.id) {
-                            this.players.set(p.id, p);
-                            if (this.onPlayerJoined) this.onPlayerJoined(p);
-                        }
-                    });
+                    this.songs = data.songs;
+                    this.selectedSong = data.selectedSong;
+                    this.updatePlayers(data.players);
+
                     if (this.onGameStateChange) this.onGameStateChange(data.gameState, data.musicStartTime);
-                    if (this.onInit) this.onInit();
+                    if (this.onInit) this.onInit(data);
                     break;
 
                 case 'player_joined':
-                    if (data.player.id !== this.id) {
-                        this.players.set(data.player.id, data.player);
-                        if (this.onPlayerJoined) this.onPlayerJoined(data.player);
-                    }
+                    this.updatePlayers([data.player]);
                     break;
 
                 case 'player_left':
@@ -50,32 +48,22 @@ export class Network {
                     if (this.onPlayerLeft) this.onPlayerLeft(data.id);
                     break;
 
+                case 'lobby_update':
+                    this.updatePlayers(data.players);
+                    if (this.onLobbyUpdate) this.onLobbyUpdate(data.players, data.votes);
+                    break;
+
                 case 'state':
-                    data.players.forEach(p => {
-                        if (p.id !== this.id) {
-                            const existing = this.players.get(p.id);
-                            if (existing) {
-                                existing.x = p.x;
-                                existing.y = p.y;
-                                existing.z = p.z;
-                                existing.targetX = p.x;
-                                existing.targetY = p.y;
-                                existing.targetZ = p.z;
-                                existing.qx = p.qx;
-                                existing.qy = p.qy;
-                                existing.qz = p.qz;
-                                existing.qw = p.qw;
-                                existing.velocity = p.velocity;
-                            }
-                        }
-                    });
+                    this.updatePlayers(data.players);
                     break;
 
                 case 'countdown_start':
-                    if (this.onCountdown) this.onCountdown(data.duration);
+                    this.selectedSong = data.selectedSong;
+                    if (this.onCountdown) this.onCountdown(data.duration, data.selectedSong);
                     break;
 
                 case 'game_start':
+                    this.selectedSong = data.selectedSong;
                     if (this.onGameStateChange) this.onGameStateChange('PLAYING', data.musicStartTime);
                     break;
 
@@ -87,12 +75,39 @@ export class Network {
         };
     }
 
+    updatePlayers(playerList) {
+        playerList.forEach(p => {
+            if (p.id !== this.id) {
+                const existing = this.players.get(p.id);
+                if (existing) {
+                    Object.assign(existing, p);
+                } else {
+                    this.players.set(p.id, p);
+                    if (this.onPlayerJoined) this.onPlayerJoined(p);
+                }
+            }
+        });
+    }
+
+    sendJoinLobby(username, model) {
+        this.send({ type: 'join_lobby', username, model });
+    }
+
+    sendVote(song) {
+        this.send({ type: 'vote_song', song });
+    }
+
+    sendReady(isReady) {
+        this.send({ type: 'player_ready', isReady });
+    }
+
     sendUpdate(state) {
+        this.send({ type: 'update', ...state });
+    }
+
+    send(msg) {
         if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-            this.socket.send(JSON.stringify({
-                type: 'update',
-                ...state
-            }));
+            this.socket.send(JSON.stringify(msg));
         }
     }
 }
