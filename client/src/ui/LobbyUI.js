@@ -432,6 +432,10 @@ export class LobbyUI {
         this._renderSongOptions();
     }
 
+    get selectedModel() {
+        return this.state.model;
+    }
+
     hide() {
         this.dom.root.style.display = 'none';
     }

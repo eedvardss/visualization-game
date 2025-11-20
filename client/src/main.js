@@ -237,11 +237,36 @@ async function init() {
 
     network.onLobbyUpdate = (players, votes) => {
         lobbyUI.updateLobby(players, votes);
+
+        // Check for model changes in remote players
+        players.forEach(p => {
+            if (p.id === network.id) return; // Skip self
+
+            const existingCar = remoteCars.get(p.id);
+            // If car exists but model is different, respawn it
+            // We store the model name on the car instance to check against
+            if (existingCar && existingCar.modelName !== p.model) {
+                console.log(`Remote player ${p.username} changed model to ${p.model}. Respawning...`);
+                graphics.scene.remove(existingCar.mesh);
+                remoteCars.delete(p.id);
+                
+                const newCar = new Car(graphics.scene, p.color, false, p.model);
+                newCar.modelName = p.model; // Store for future checks
+                remoteCars.set(p.id, newCar);
+            }
+            // If car doesn't exist yet (e.g. late joiner sync), spawn it
+            else if (!existingCar) {
+                 const newCar = new Car(graphics.scene, p.color, false, p.model);
+                 newCar.modelName = p.model;
+                 remoteCars.set(p.id, newCar);
+            }
+        });
     };
 
     network.onPlayerJoined = (playerData) => {
         if (!remoteCars.has(playerData.id)) {
             const car = new Car(graphics.scene, playerData.color, false, playerData.model);
+            car.modelName = playerData.model; // Store model name
             remoteCars.set(playerData.id, car);
         }
     };
