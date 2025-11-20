@@ -270,6 +270,40 @@ export class NebulaBackground {
         this.uniforms.uColor3.value.copy(c3);
     }
 
+    setHue(hue) {
+        // hue is 0-360
+        const h = hue / 360;
+
+        // Helper to shift hue while keeping saturation/lightness
+        const shift = (color, offsetH) => {
+            const hsl = { h: 0, s: 0, l: 0 };
+            color.getHSL(hsl);
+            color.setHSL((h + offsetH) % 1, hsl.s, hsl.l);
+        };
+
+        // Shift all 3 colors relative to the base hue
+        // We assume the base palette has some relation we want to preserve or just override
+        // Let's just set the base hue and keep relative offsets if possible, 
+        // or just set them all to the new hue with variations.
+
+        // Simple approach: Set base hue, and offset others slightly
+        const c1 = this.uniforms.uColor1.value;
+        const c2 = this.uniforms.uColor2.value;
+        const c3 = this.uniforms.uColor3.value;
+
+        // We don't want to lose the original saturation/lightness if we can avoid it
+        // But we don't store the original palette. 
+        // Let's just shift the current colors' hue to the target hue.
+
+        const hsl1 = {}; c1.getHSL(hsl1);
+        const hsl2 = {}; c2.getHSL(hsl2);
+        const hsl3 = {}; c3.getHSL(hsl3);
+
+        c1.setHSL(h, hsl1.s, hsl1.l);
+        c2.setHSL((h + 0.1) % 1, hsl2.s, hsl2.l); // Accent slightly offset
+        c3.setHSL((h + 0.5) % 1, hsl3.s, hsl3.l); // Glow complementary-ish
+    }
+
     update(time, audioData = {}) {
         this.uniforms.uTime.value = time;
 

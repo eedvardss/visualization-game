@@ -8,7 +8,9 @@ import { Network } from './network.js';
 import { AudioPreprocessor } from './audio/AudioPreprocessor.js';
 import { LobbyUI } from './ui/LobbyUI.js';
 import { ReccoBeatsClient } from './audio/ReccoBeatsClient.js';
+import { PauseMenu } from './ui/PauseMenu.js';
 import { DEFAULT_SONG, SONG_LIBRARY } from './utils/songCatalog.js';
+
 const FALLBACK_AUDIO_FEATURES = {
     danceability: 0.78,
     energy: 0.88,
@@ -81,6 +83,7 @@ async function init() {
     let audioTimeline = null;
     let audioSource = null;
     let audioAnalyser = null;
+    let gainNode = null;
     let audioStartTime = 0;
     let lastAudioTime = 0;
 
@@ -239,6 +242,40 @@ async function init() {
         if (song) loadMusic(song);
     };
 
+    // ===========================
+    // PAUSE MENU
+    // ===========================
+    const pauseMenu = new PauseMenu({
+        onResume: () => {
+            // Resume game logic if needed
+        },
+        onMainMenu: () => {
+            window.location.reload();
+        },
+        onVolumeChange: (vol) => {
+            if (gainNode) {
+                gainNode.gain.value = vol;
+            }
+        },
+        onEffectsChange: (strength) => {
+            if (graphics) {
+                graphics.setBloomStrength(strength);
+            }
+        },
+        onColorChange: (hue) => {
+            // hue is 0-360
+            if (nebula) {
+                nebula.setHue(hue);
+            }
+        }
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            pauseMenu.toggle();
+        }
+    });
+
     network.connect();
 
     function spawnLocalCar(model) {
@@ -259,8 +296,14 @@ async function init() {
         audioAnalyser = audioPreprocessor.audioContext.createAnalyser();
         audioAnalyser.fftSize = 256;
 
+        // Create GainNode
+        gainNode = audioPreprocessor.audioContext.createGain();
+        gainNode.gain.value = 0.3; // Default volume lower
+
+        // Connect: Source -> Analyser -> Gain -> Destination
         audioSource.connect(audioAnalyser);
-        audioAnalyser.connect(audioPreprocessor.audioContext.destination);
+        audioAnalyser.connect(gainNode);
+        gainNode.connect(audioPreprocessor.audioContext.destination);
 
         audioSource.start(0, offset);
         audioStartTime = audioPreprocessor.audioContext.currentTime - offset;

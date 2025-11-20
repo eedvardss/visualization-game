@@ -74,7 +74,7 @@ export class Graphics {
         this.applySkyPalette();
         this.createStarfield();
         this.createNebula(this.skyPalette.fog.getHex());
-        
+
         // Update lights to match the new palette
         this.ambientLight.color.copy(this.skyPalette.base).multiplyScalar(0.5);
         this.rimLight.color.copy(this.skyPalette.accent);
@@ -92,9 +92,24 @@ export class Graphics {
         this.baseFogColor = fogColor.clone();
         this.baseFogDensity = density;
 
-        const targetBloom = THREE.MathUtils.lerp(0.2, 0.5, this.skyPalette.features.energy);
-        this.bloomPass.strength = targetBloom;
+        // Store the target bloom for this palette so we can scale it
+        this.paletteBloomStrength = THREE.MathUtils.lerp(0.2, 0.5, this.skyPalette.features.energy);
+        this.updateBloom();
+
         this.renderer.toneMappingExposure = THREE.MathUtils.lerp(0.7, 0.9, this.skyPalette.features.energy);
+    }
+
+    setBloomStrength(multiplier) {
+        this.bloomMultiplier = multiplier;
+        this.updateBloom();
+    }
+
+    updateBloom() {
+        if (this.bloomPass) {
+            const base = this.paletteBloomStrength !== undefined ? this.paletteBloomStrength : 0.45;
+            const mult = this.bloomMultiplier !== undefined ? this.bloomMultiplier : 1.0;
+            this.bloomPass.strength = base * mult;
+        }
     }
 
     createStarfield() {
@@ -117,7 +132,7 @@ export class Graphics {
             const color = this.skyPalette.base.clone()
                 .lerp(this.skyPalette.accent, mixAccent)
                 .lerp(this.skyPalette.glow, mixGlow);
-            
+
             // Random twinkle brightness
             color.multiplyScalar(0.7 + Math.random() * 0.5);
             colors.push(color.r, color.g, color.b);
@@ -125,7 +140,7 @@ export class Graphics {
 
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-        
+
         const material = new THREE.PointsMaterial({
             size: 1.7,
             transparent: true,
@@ -135,7 +150,7 @@ export class Graphics {
             vertexColors: true,
             sizeAttenuation: true
         });
-        
+
         this.starfield = new THREE.Points(geometry, material);
         this.scene.add(this.starfield);
     }
@@ -145,7 +160,7 @@ export class Graphics {
         if (this.dust) this.scene.remove(this.dust);
 
         const tint = colorHex !== undefined ? colorHex : this.skyPalette.accent.getHex();
-        
+
         // Nebula Geometry
         const geo = new THREE.SphereGeometry(800, 32, 32);
         const mat = new THREE.MeshBasicMaterial({

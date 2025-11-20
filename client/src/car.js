@@ -2,12 +2,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export class Car {
-    constructor(scene, color, isLocal = false, modelName = 'mercedes.glb') {
+    constructor(scene, color, isLocal = false, modelName = 'mercedes.glb', name = 'Player') {
         this.scene = scene;
         this.isLocal = isLocal;
+        this.name = name;
 
         this.mesh = new THREE.Group();
         this.scene.add(this.mesh);
+
+        this.addNameTag(name);
 
         //-----------------------------------
         // LOAD MODEL
@@ -144,6 +147,7 @@ export class Car {
             sizeAttenuation: true,
         });
         this.smokeSystem = new THREE.Points(smokeGeo, this.smokeMat);
+        this.smokeSystem.frustumCulled = false;
         this.scene.add(this.smokeSystem);
 
         //-----------------------------------
@@ -161,6 +165,7 @@ export class Car {
             sizeAttenuation: true,
         });
         this.flameSystem = new THREE.Points(flameGeo, this.flameMat);
+        this.flameSystem.frustumCulled = false;
         this.scene.add(this.flameSystem);
 
         //-----------------------------------
@@ -178,6 +183,7 @@ export class Car {
             sizeAttenuation: true,
         });
         this.sparkSystem = new THREE.Points(sparkGeo, this.sparkMat);
+        this.sparkSystem.frustumCulled = false;
         this.scene.add(this.sparkSystem);
 
         //-----------------------------------
@@ -195,6 +201,7 @@ export class Car {
             sizeAttenuation: true,
         });
         this.skidSystem = new THREE.Points(skidGeo, this.skidMat);
+        this.skidSystem.frustumCulled = false;
         this.scene.add(this.skidSystem);
 
         //-----------------------------------
@@ -212,23 +219,43 @@ export class Car {
             sizeAttenuation: true,
         });
         this.speedLineSystem = new THREE.Points(speedLineGeo, this.speedLineMat);
+        this.speedLineSystem.frustumCulled = false;
         this.scene.add(this.speedLineSystem);
     }
 
-    onKey(e, pressed) {
-        const k = e.key.toLowerCase();
-        if (k === ' ') {
-            this.keys.space = pressed;
-        } else if (k === 'shift') {
-            this.keys.shift = pressed;
-        } else if (k in this.keys) {
-            this.keys[k] = pressed;
-        }
+    addNameTag(name) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 256;
+        canvas.height = 64;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.font = 'bold 32px Arial';
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(name, 128, 32);
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+        const sprite = new THREE.Sprite(spriteMaterial);
+
+        sprite.position.y = 2.5;
+        sprite.scale.set(2, 0.5, 1);
+
+        this.mesh.add(sprite);
     }
 
-    //-----------------------------------
-    // MAIN UPDATE
-    //-----------------------------------
+    onKey(event, pressed) {
+        const key = event.key.toLowerCase();
+        if (this.keys.hasOwnProperty(key)) {
+            this.keys[key] = pressed;
+        }
+        if (key === ' ') this.keys.space = pressed;
+    }
+
     update(dt, context = {}) {
         const { trackCurve, frames, canMove = true } = context;
 
