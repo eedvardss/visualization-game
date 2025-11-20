@@ -10,16 +10,6 @@ export class TrackEffects {
         this.orbs = [];
         this.initOrbs();
 
-        // 2. SHOCKWAVE RINGS
-        this.rings = [];
-        this.ringGeo = new THREE.RingGeometry(1, 1.2, 32);
-        this.ringMat = new THREE.MeshBasicMaterial({
-            color: 0x00ffff,
-            side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 0
-        });
-
         // 3. EQUALIZER PILLARS
         this.pillars = null;
         this.initPillars();
@@ -259,21 +249,7 @@ export class TrackEffects {
     }
 
     spawnShockwave() {
-        // Find a dead ring or create new
-        let ring = this.rings.find(r => !r.visible);
-        if (!ring) {
-            ring = new THREE.Mesh(this.ringGeo, this.ringMat.clone());
-            ring.rotation.x = -Math.PI / 2;
-            this.scene.add(ring);
-            this.rings.push(ring);
-        }
-
-        // Reset ring
-        ring.visible = true;
-        ring.scale.setScalar(1);
-        ring.material.opacity = 1.0;
-        ring.position.copy(this.trackMesh.position); // Center of world usually, or track center
-        ring.position.y = 5; // Slightly above ground
+        // Disabled
     }
 
     update(time, audioData) {
@@ -320,17 +296,6 @@ export class TrackEffects {
             const beat = this.material.uniforms ? this.material.uniforms.uBeat.value : 0;
             const scale = 1.0 + beat * 0.4 + energy * 0.3;
             orb.scale.set(scale, scale, scale);
-        });
-
-        // Update Shockwaves
-        this.rings.forEach(ring => {
-            if (ring.visible) {
-                ring.scale.multiplyScalar(1.05); // Expand
-                ring.material.opacity -= 0.02; // Fade
-                if (ring.material.opacity <= 0) {
-                    ring.visible = false;
-                }
-            }
         });
 
         // Update Pillars

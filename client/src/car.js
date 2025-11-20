@@ -20,7 +20,13 @@ export class Car {
             `/assets/models/${modelName}`,
             (gltf) => {
                 const model = gltf.scene;
-                model.scale.set(2, 2, 2);
+                
+                // Adjust scale based on model
+                if (modelName.toLowerCase().includes('volvo')) {
+                    model.scale.set(1.7, 1.7, 1.7);
+                } else {
+                    model.scale.set(2, 2, 2);
+                }
 
                 model.traverse((child) => {
                     if (child.isMesh) {
@@ -97,7 +103,7 @@ export class Car {
         this.HEADING_FRICTION = 0.10;
         this.SIDEWAYS_FACTOR = 1.2;
 
-        this.TRACK_WIDTH = 6.0;
+        this.TRACK_WIDTH = 7.0; // Increased to allow 3-wide grid spawning (road width is 15)
 
         //-----------------------------------
         // DRIFT + NITRO

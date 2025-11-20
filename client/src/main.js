@@ -324,9 +324,57 @@ async function init() {
 
     function spawnLocalCar(model) {
         if (localCar) return;
+        
+        // 1. Get Spawn Index from Network or Default to 0
+        // Since network.players map contains us (received from init), we can find our spawnIndex
+        const myData = network.players.get(network.id);
+        const spawnIndex = myData ? (myData.spawnIndex || 0) : 0;
+        
+        console.log(`Spawning local car. NetworkID: ${network.id}, Index: ${spawnIndex}`);
+
         localCar = new Car(graphics.scene, 0x00ff00, true, model);
-        // Set start pos
-        localCar.mesh.position.set(150, 10, 0); // Start on track roughly
+        
+        // 2. Calculate Grid Position
+        // 3 cars per row
+        // Row 0: 0, 1, 2
+        // Row 1: 3, 4, 5
+        // Spacing: 15 units sideways, 20 units back
+        
+        const carsPerRow = 3;
+        const row = Math.floor(spawnIndex / carsPerRow);
+        const col = spawnIndex % carsPerRow;
+        
+        // Center the column (e.g. if 3 cars: -1, 0, 1. If 2 cars: -0.5, 0.5)
+        // But fixed slots are easier: Left, Center, Right
+        // 0=Left, 1=Center, 2=Right
+        const sideOffset = (col - 1) * 5; // Reduced from 15 to fit on track
+        const backOffset = row * 20;
+
+        // We need the track start position and direction
+        // Assuming track starts at (0,0,0) looking along +Z or something?
+        // Actually trackGen generates a loop. We usually start at index 0 of the curve.
+        
+        const startPoint = trackCurve.getPointAt(0);
+        const startTangent = trackCurve.getTangentAt(0);
+        const up = new THREE.Vector3(0, 1, 0);
+        const right = new THREE.Vector3().crossVectors(startTangent, up).normalize();
+        
+        // Final Position
+        const spawnPos = startPoint.clone()
+            .add(right.multiplyScalar(sideOffset))
+            .add(startTangent.clone().multiplyScalar(-backOffset)) // Move BACKWARDS from start line
+            .add(up.multiplyScalar(2)); // Lift up slightly
+
+        localCar.mesh.position.copy(spawnPos);
+        localCar.mesh.lookAt(spawnPos.clone().add(startTangent));
+        
+        // Update track progress so we don't snap back to 0 immediately
+        const length = trackCurve.getLength();
+        const progressOffset = backOffset / length;
+        localCar.trackProgress = (1.0 - progressOffset) % 1.0;
+        
+        // CRITICAL: Set lateral offset so update() doesn't snap us back to center
+        localCar.lateralOffset = sideOffset;
     }
 
     function startMusic(offset = 0) {

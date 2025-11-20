@@ -23,12 +23,21 @@ wss.on('connection', (ws) => {
   console.log(`Player connected: ${id}`);
 
   // Initialize player state
+  // FIND FIRST AVAILABLE SPAWN INDEX
+  const usedIndices = new Set();
+  players.forEach(p => usedIndices.add(p.spawnIndex));
+  let spawnIndex = 0;
+  while (usedIndices.has(spawnIndex)) {
+    spawnIndex++;
+  }
+
   players.set(id, {
     id,
     username: `Racer_${id.substr(0, 4)}`,
     model: 'mercedes.glb',
     color: Math.floor(Math.random() * 16777215),
     isReady: false,
+    spawnIndex, // Store spawn index
     vote: null,
     x: 0, y: 0, z: 0,
     qx: 0, qy: 0, qz: 0, qw: 1,
@@ -106,6 +115,7 @@ function getPublicPlayerList() {
     model: p.model,
     color: p.color,
     isReady: p.isReady,
+    spawnIndex: p.spawnIndex, // Send spawn index to clients
     vote: p.vote,
     x: p.x, y: p.y, z: p.z,
     qx: p.qx, qy: p.qy, qz: p.qz, qw: p.qw,

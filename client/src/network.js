@@ -85,6 +85,14 @@ export class Network {
                     this.players.set(p.id, p);
                     if (this.onPlayerJoined) this.onPlayerJoined(p);
                 }
+            } else {
+                // Update self data in map (critical for spawnIndex sync)
+                const existing = this.players.get(p.id);
+                if (existing) {
+                    Object.assign(existing, p);
+                } else {
+                    this.players.set(p.id, p);
+                }
             }
         });
     }
