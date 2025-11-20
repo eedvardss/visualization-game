@@ -164,6 +164,9 @@ export class TrackGenerator {
         // ======== 5. GUARDRAIL MODEL INSTANCES =======================
         this.loadGuardrails();
 
+        // ======== 6. START/FINISH LINE ===============================
+        this.createStartFinishLine();
+
         return { curve: this.curve, frames: this.frenetFrames };
     }
 
@@ -252,10 +255,87 @@ export class TrackGenerator {
                 lookMatrix.lookAt(guard.position, lookTarget, upVec);
                 tempQuat.setFromRotationMatrix(lookMatrix);
                 guard.quaternion.copy(tempQuat);
-                guard.rotateY(-Math.PI / 2);
+
+                // Flip rotation for the outside rail (lateral < 0) to face inward
+                // Inside rail (lateral > 0) stays at -Math.PI / 2
+                const rotation = lateral > 0 ? -Math.PI / 2 : Math.PI / 2;
+                guard.rotateY(rotation);
 
                 this.guardrailGroup.add(guard);
             }
         }
+    }
+
+    createStartFinishLine() {
+        if (!this.curve || !this.frenetFrames) return;
+
+        // 1. Create Checkerboard Texture
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+
+        const tileSize = 64;
+
+        // Draw alternating squares
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#111111';
+        for (let y = 0; y < 2; y++) {
+            for (let x = 0; x < 8; x++) {
+                if ((x + y) % 2 === 1) {
+                    ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                }
+            }
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.magFilter = THREE.NearestFilter;
+        texture.minFilter = THREE.NearestFilter;
+
+        // 2. Geometry
+        // Width = roadWidth, Height = 3 meters along track
+        const geometry = new THREE.PlaneGeometry(this.roadWidth, 3);
+
+        // 3. Material
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.DoubleSide,
+            polygonOffset: true,
+            polygonOffsetFactor: -2, // Ensure it sits on top of the road
+        });
+
+        // 4. Mesh
+        const mesh = new THREE.Mesh(geometry, material);
+
+        // 5. Position & Orientation
+        // Move line slightly forward so car starts before it
+        const t = 0.01;
+        const point = this.curve.getPointAt(t);
+        const frameCount = this.frenetFrames.tangents.length;
+        const i = Math.floor(t * (frameCount - 1));
+
+        // Frenet vectors at start
+        const tangent = this.frenetFrames.tangents[i];
+        const normal = this.frenetFrames.normals[i]; // Points across track
+        const binormal = this.frenetFrames.binormals[i]; // Points down/up
+
+        // Up vector for the road surface
+        const up = binormal.clone().negate().normalize();
+
+        mesh.position.copy(point);
+        mesh.position.add(up.clone().multiplyScalar(0.35)); // Lift above road (thickness is 0.6, so top is at 0.3)
+
+        // Align plane to road surface
+        // Plane Width (X) -> Normal (Across road)
+        // Plane Height (Y) -> Tangent (Along road)
+        // Plane Normal (Z) -> Up
+
+        const matrix = new THREE.Matrix4();
+        matrix.makeBasis(normal, tangent, up);
+        mesh.quaternion.setFromRotationMatrix(matrix);
+
+        this.scene.add(mesh);
     }
 }
