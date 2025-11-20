@@ -8,6 +8,35 @@ import { Network } from './network.js';
 import { AudioPreprocessor } from './audio/AudioPreprocessor.js';
 import { LobbyUI } from './ui/LobbyUI.js';
 import { ReccoBeatsClient } from './audio/ReccoBeatsClient.js';
+import { DEFAULT_SONG, SONG_LIBRARY } from './utils/songCatalog.js';
+const FALLBACK_AUDIO_FEATURES = {
+    danceability: 0.78,
+    energy: 0.88,
+    key: 5,
+    loudness: -5.2,
+    mode: 1,
+    speechiness: 0.055,
+    acousticness: 0.014,
+    instrumentalness: 0.0000123,
+    liveness: 0.36,
+    valence: 0.62,
+    tempo: 128.97,
+    time_signature: 4
+};
+
+function normalizeAudioFeatures(raw) {
+    if (!raw) return null;
+    if (Array.isArray(raw.audio_features)) {
+        return raw.audio_features[0];
+    }
+    if (raw.audio_features && typeof raw.audio_features === 'object') {
+        return raw.audio_features;
+    }
+    if (Array.isArray(raw)) {
+        return raw[0];
+    }
+    return raw;
+}
 
 async function init() {
     // ===========================
@@ -28,20 +57,10 @@ async function init() {
     document.body.appendChild(uiOverlay);
 
     // ===========================
-    // AUDIO FEATURE LOAD
-    // ===========================
-    const response = await fetch('/audio_features.json');
-    const audioFeatures = await response.json();
-
-    // ===========================
     // GRAPHICS + STARFIELD + FOG
     // ===========================
-    const graphics = new Graphics();
-    // Enable fog with a BRIGHT INDIGO color
-    // Density 0.01: Lighter, more breathable, but still atmospheric.
-    // Enable fog with a RICH PURPLE color to match nebula glow
-    // Density 0.008: Stronger fog, but colored to blend with the sky (no black circle)
-    graphics.scene.fog = new THREE.FogExp2(0x2d1b4e, 0.008);
+    let currentAudioFeatures = { ...FALLBACK_AUDIO_FEATURES };
+    const graphics = new Graphics(currentAudioFeatures);
 
     // ===========================
     // TRACK GENERATION
@@ -52,7 +71,7 @@ async function init() {
     const frenetFrames = trackData.frames;
     const trackMesh = trackGen.mesh;
     const trackEffects = new TrackEffects(trackGen.mesh);
-    const nebula = new NebulaBackground(graphics.scene);
+    const nebula = new NebulaBackground(graphics.scene, graphics.skyPalette);
 
     // ===========================
     // AUDIO PRE-PROCESSOR
@@ -67,20 +86,76 @@ async function init() {
 
     const reccoClient = new ReccoBeatsClient();
 
+    function applyAudioFeatures(rawFeatures) {
+        const normalized = normalizeAudioFeatures(rawFeatures);
+        if (!normalized) return;
+
+        currentAudioFeatures = {
+            danceability: normalized.danceability ?? FALLBACK_AUDIO_FEATURES.danceability,
+            energy: normalized.energy ?? FALLBACK_AUDIO_FEATURES.energy,
+            valence: normalized.valence ?? FALLBACK_AUDIO_FEATURES.valence,
+            acousticness: normalized.acousticness ?? FALLBACK_AUDIO_FEATURES.acousticness,
+            tempo: normalized.tempo ?? FALLBACK_AUDIO_FEATURES.tempo,
+            loudness: normalized.loudness ?? FALLBACK_AUDIO_FEATURES.loudness,
+            liveness: normalized.liveness ?? FALLBACK_AUDIO_FEATURES.liveness,
+            speechiness: normalized.speechiness ?? FALLBACK_AUDIO_FEATURES.speechiness,
+            instrumentalness: normalized.instrumentalness ?? FALLBACK_AUDIO_FEATURES.instrumentalness,
+            colorHint: normalized.colorHint
+        };
+
+        console.log('Applying audio features from ReccoBeats:', currentAudioFeatures);
+        graphics.updateSkyPalette(currentAudioFeatures);
+        if (nebula && graphics.skyPalette) {
+            nebula.applyPalette(graphics.skyPalette);
+        }
+    }
+
+    async function analyzeWithRecco(audioBlob, songName) {
+        if (!audioBlob) return false;
+        try {
+            const result = await reccoClient.analyzeTrack(audioBlob);
+            if (!result) {
+                console.warn('ReccoBeats did not return features.');
+                return false;
+            }
+            applyAudioFeatures(result);
+            console.log(`ReccoBeats analysis complete for ${songName}`);
+            return true;
+        } catch (error) {
+            console.error('Failed to analyze audio with ReccoBeats:', error);
+            return false;
+        }
+    }
+
     async function loadMusic(songName) {
         try {
             // 1. Load for AudioContext (ArrayBuffer)
-            const result = await audioPreprocessor.load(`/assets/music/${songName}`);
-            const analysis = audioPreprocessor.analyze(result);
+            const { audioBuffer: decodedBuffer, audioBlob } = await audioPreprocessor.load(`/assets/music/${songName}`);
+            const analysis = audioPreprocessor.analyze(decodedBuffer);
             audioBuffer = analysis.buffer;
             audioTimeline = analysis.timeline;
             console.log(`Audio ready: ${songName}`);
-
-            // 2. Fetch as Blob for ReccoBeats API
-            // (We need to fetch again or convert buffer, fetching is easier for now)
-            fetch(`/assets/music/${songName}`)
+            await ensureAudioFeatures(songName, audioBlob);
         } catch (e) {
             console.error('Failed to load audio:', e);
+        }
+    }
+
+    async function ensureAudioFeatures(songName, audioBlob) {
+        let applied = false;
+        if (audioBlob) {
+            applied = await analyzeWithRecco(audioBlob, songName);
+        }
+        if (!applied) {
+            const fallback = SONG_LIBRARY[songName]?.fallbackFeatures;
+            if (fallback) {
+                console.warn(`Using catalog fallback features for ${songName}`);
+                applyAudioFeatures(fallback);
+                applied = true;
+            }
+        }
+        if (!applied) {
+            applyAudioFeatures(FALLBACK_AUDIO_FEATURES);
         }
     }
 
@@ -92,15 +167,16 @@ async function init() {
     const remoteCars = new Map();
     let gameState = 'WAITING';
 
-    const lobbyUI = new LobbyUI(network, (model) => {
+    const lobbyUI = new LobbyUI(network, (model, songChoice) => {
         // Singleplayer start
         spawnLocalCar(model);
         gameState = 'PLAYING';
-        loadMusic('Children.mp3').then(() => startMusic());
+        const track = songChoice || DEFAULT_SONG;
+        loadMusic(track).then(() => startMusic());
     });
 
     network.onInit = (data) => {
-        // Handle init if needed
+        lobbyUI.setSongs(data.songs);
     };
 
     network.onLobbyUpdate = (players, votes) => {
@@ -137,13 +213,12 @@ async function init() {
             setTimeout(() => uiOverlay.innerText = '', 1000);
 
             // Start Music Logic
-            if (network.selectedSong) {
-                loadMusic(network.selectedSong).then(() => {
-                    const delay = startTime - Date.now();
-                    if (delay > 0) setTimeout(() => startMusic(), delay);
-                    else startMusic(Math.abs(delay) / 1000);
-                });
-            }
+            const songToPlay = network.selectedSong || DEFAULT_SONG;
+            loadMusic(songToPlay).then(() => {
+                const delay = startTime - Date.now();
+                if (delay > 0) setTimeout(() => startMusic(), delay);
+                else startMusic(Math.abs(delay) / 1000);
+            });
 
             // Spawn local car if not already
             if (!localCar) spawnLocalCar(lobbyUI.selectedModel);
@@ -267,14 +342,18 @@ async function init() {
 
             // 2. SMOOTH COLOR PULSE (Anti-Epilepsy)
             if (currentAudioData.timelineEvent && currentAudioData.timelineEvent.type === 'beat') {
-                graphics.pulseIntensity = 0.6;
+                const current = graphics.pulseIntensity || 0;
+                graphics.pulseIntensity = Math.min(0.16, current + 0.07);
             } else {
-                graphics.pulseIntensity = THREE.MathUtils.lerp(graphics.pulseIntensity || 0, 0, 0.05);
+                graphics.pulseIntensity = THREE.MathUtils.lerp(graphics.pulseIntensity || 0, 0, 0.14);
             }
 
             // Apply pulse to color
-            const pulseColor = graphics.baseFogColor.clone().offsetHSL(0, 0, graphics.pulseIntensity * 0.15);
-            graphics.scene.fog.color.copy(pulseColor);
+            if (graphics.baseFogColor) {
+                const pulseColor = graphics.baseFogColor.clone().offsetHSL(0, 0, graphics.pulseIntensity * 0.018);
+                graphics.scene.fog.color.copy(pulseColor);
+                graphics.scene.background.copy(graphics.scene.fog.color);
+            }
         }
 
         // 3. CAMERA SHAKE

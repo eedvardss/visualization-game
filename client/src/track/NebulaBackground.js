@@ -1,23 +1,39 @@
 import * as THREE from 'three';
 
+function tintColor(source, satMultiplier = 1.0, lightOffset = 0) {
+    const color = source.clone();
+    const hsl = { h: 0, s: 0, l: 0 };
+    color.getHSL(hsl);
+    hsl.s = THREE.MathUtils.clamp(hsl.s * satMultiplier, 0, 1);
+    hsl.l = THREE.MathUtils.clamp(hsl.l + lightOffset, 0, 1);
+    color.setHSL(hsl.h, hsl.s, hsl.l);
+    return color;
+}
+
 export class NebulaBackground {
-    constructor(scene) {
+    constructor(scene, palette = null) {
         this.scene = scene;
         this.mesh = null;
         this.dust = null;
+
+        const baseColor = palette?.base ? palette.base.clone() : new THREE.Color(0x050510);
+        const accentColor = palette?.accent ? palette.accent.clone() : new THREE.Color(0x4b0082);
+        const glowColor = palette?.glow ? palette.glow.clone() : new THREE.Color(0x00f0ff);
 
         // Premium Cosmic Palette
         this.uniforms = {
             uTime: { value: 0 },
             uBeat: { value: 0 },
             uEnergy: { value: 0 },
-            uColor1: { value: new THREE.Color(0x050510) }, // Deep Void Blue
-            uColor2: { value: new THREE.Color(0x4b0082) }, // Indigo/Purple
-            uColor3: { value: new THREE.Color(0x00f0ff) }  // Electric Cyan
+            uEuphoria: { value: 0 },
+            uColor1: { value: baseColor },
+            uColor2: { value: accentColor },
+            uColor3: { value: glowColor }
         };
 
         this.init();
-        this.initDust();
+        this.initDust(palette);
+        if (palette) this.applyPalette(palette);
     }
 
     init() {
@@ -42,6 +58,7 @@ export class NebulaBackground {
             uniform vec3 uColor1;
             uniform vec3 uColor2;
             uniform vec3 uColor3;
+            uniform float uEuphoria;
             
             varying vec2 vUv;
             varying vec3 vWorldPosition;
@@ -131,34 +148,42 @@ export class NebulaBackground {
                 vec3 coord = vWorldPosition * 0.0015; // Larger scale clouds
                 float time = uTime * 0.05;
                 
-                // Beat distortion - REMOVED (User disliked it)
-                // coord.y += uBeat * 0.1 * sin(coord.x * 5.0 + time * 2.0);
-                
                 // Layered Noise
                 float n1 = fbm(coord + vec3(time, time * 0.3, 0.0));
                 float n2 = fbm(coord * 2.0 - vec3(0.0, time * 0.5, 0.0));
                 
-                // Combine
                 float noise = n1 + n2 * 0.5;
+                float baseBlend = clamp(noise + 0.25, 0.0, 1.0);
                 
                 // Color Mixing
-                vec3 color = mix(uColor1, uColor2, noise + 0.3);
+                vec3 color = mix(uColor1, uColor2, baseBlend);
                 
                 // Highlights based on energy
-                vec3 highlight = mix(uColor2, uColor3, n2 + uEnergy);
-                color = mix(color, highlight, n1 * (0.4 + uEnergy * 0.6));
+                float highlightBlend = clamp(n2 + uEnergy * 0.8, 0.0, 1.0);
+                vec3 highlight = mix(uColor2, uColor3, highlightBlend);
+                float mixAmt = clamp(n1 * (0.35 + uEnergy * 0.5), 0.0, 1.0);
+                color = mix(color, highlight, mixAmt);
                 
-                // Pulse Brightness & Color Shift on Beat
-                // Flashes bright purple/cyan on the beat
-                vec3 beatColor = vec3(0.4, 0.2, 0.8); 
-                color += beatColor * uBeat * 0.5;
+                // Additional glow layers
+                float glowEnvelope = smoothstep(0.15, 0.85, baseBlend);
+                vec3 rim = mix(uColor2, uColor3, glowEnvelope * (0.6 + uEnergy * 0.4));
+                color += rim * pow(max(0.0, n2), 3.0) * 0.4;
                 
-                // Overall brightness pulse
-                color *= (0.8 + uBeat * 0.2);
-                
-                // Fog fade at bottom - REMOVED to allow full 360 nebula
-                // float fog = smoothstep(-100.0, 100.0, vWorldPosition.y);
-                // color = mix(color, vec3(0.0), 1.0 - fog); 
+                // Pulse Brightness & Color Shift on Beat (clamped to avoid artifacts)
+                vec3 beatColor = mix(uColor2, uColor3, 0.65); 
+                float pulseMask = smoothstep(0.5, 0.68, noise) * snoise(coord * 4.0 + vec3(time * 0.6, 0.0, 0.0));
+                pulseMask = clamp(pulseMask * 1.5, 0.0, 1.0);
+                color += beatColor * pulseMask * clamp(uBeat, 0.0, 1.0) * 0.38;
+
+                // Euphoria waves (high energy moments flood the sky)
+                float euphoricWave = smoothstep(0.25, 0.9, noise + uEuphoria * 0.4);
+                vec3 euphoricColor = mix(color, mix(uColor2, uColor3, 0.9), euphoricWave);
+                color = mix(color, euphoricColor, clamp(uEuphoria, 0.0, 1.0));
+                color += vec3(0.1, 0.12, 0.18) * uEuphoria * euphoricWave;
+
+                // Overall brightness pulse (still controlled)
+                color *= (0.9 + clamp(uBeat, 0.0, 1.0) * 0.05);
+                color = pow(max(color, vec3(0.05)), vec3(1.02));
                 
                 gl_FragColor = vec4(color, 1.0);
             }
@@ -178,32 +203,63 @@ export class NebulaBackground {
         this.scene.add(this.mesh);
     }
 
-    initDust() {
+    initDust(palette) {
         const count = 2000;
         const geometry = new THREE.BufferGeometry();
         const positions = [];
         const speeds = [];
+        const colors = [];
 
         for (let i = 0; i < count; i++) {
             positions.push(THREE.MathUtils.randFloatSpread(1500));
             positions.push(THREE.MathUtils.randFloatSpread(1500)); // Full height range (was biased up)
             positions.push(THREE.MathUtils.randFloatSpread(1500));
             speeds.push(Math.random());
+
+            const colorSource = palette
+                ? palette.accent.clone().lerp(palette.glow, Math.random())
+                : new THREE.Color(0xffffff);
+            colors.push(colorSource.r, colorSource.g, colorSource.b);
         }
 
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         geometry.setAttribute('speed', new THREE.Float32BufferAttribute(speeds, 1));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
         const material = new THREE.PointsMaterial({
-            color: 0xffffff,
-            size: 2,
+            size: 2.6,
             transparent: true,
-            opacity: 0.8,
-            blending: THREE.AdditiveBlending
+            opacity: 0.75,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            vertexColors: true,
+            sizeAttenuation: true
         });
 
         this.dust = new THREE.Points(geometry, material);
         this.scene.add(this.dust);
+    }
+
+    applyPalette(palette) {
+        if (!palette) return;
+
+        const cloudBase = tintColor(palette.base, 1.05, 0.06);
+        const neonHighlight = tintColor(palette.base, 1.2, 0.14);
+        const glowAccent = tintColor(palette.accent, 1.1, 0.18).lerp(tintColor(palette.glow, 1.05, 0.12), 0.4);
+
+        this.setColors(cloudBase, neonHighlight, glowAccent);
+
+        if (this.dust && this.dust.geometry.attributes.color) {
+            const colorAttr = this.dust.geometry.attributes.color;
+            for (let i = 0; i < colorAttr.count; i++) {
+                const idx = i * 3;
+                const c = neonHighlight.clone().lerp(glowAccent, Math.random());
+                colorAttr.array[idx] = c.r;
+                colorAttr.array[idx + 1] = c.g;
+                colorAttr.array[idx + 2] = c.b;
+            }
+            colorAttr.needsUpdate = true;
+        }
     }
 
     setColors(c1, c2, c3) {
@@ -214,7 +270,7 @@ export class NebulaBackground {
         this.uniforms.uColor3.value.copy(c3);
     }
 
-    update(time, audioData) {
+    update(time, audioData = {}) {
         this.uniforms.uTime.value = time;
 
         // SMOOTH PULSE (Anti-Epilepsy)
@@ -223,13 +279,17 @@ export class NebulaBackground {
         // We'll reduce the max intensity and use a softer decay.
 
         if (audioData.timelineEvent && audioData.timelineEvent.type === 'beat') {
-            // Jump to 0.6 instead of 1.0 for softer pulse
-            this.uniforms.uBeat.value = 0.6;
+            const target = 0.4;
+            this.uniforms.uBeat.value = THREE.MathUtils.lerp(
+                this.uniforms.uBeat.value,
+                target,
+                0.35
+            );
         } else {
             this.uniforms.uBeat.value = THREE.MathUtils.lerp(
                 this.uniforms.uBeat.value,
                 0.0,
-                0.03 // Slower decay = smoother
+                0.08
             );
         }
 
@@ -240,6 +300,16 @@ export class NebulaBackground {
             0.05 // Slower reaction to energy for smoother look
         );
 
+        const euphoricTarget = audioData.realtimeEnergy
+            ? Math.min(1, Math.max(0, audioData.realtimeEnergy - 0.55) * 2.2)
+            : 0;
+        const beatBoost = audioData.timelineEvent && audioData.timelineEvent.type === 'beat' ? 0.25 : 0;
+        this.uniforms.uEuphoria.value = THREE.MathUtils.lerp(
+            this.uniforms.uEuphoria.value,
+            Math.min(1, euphoricTarget + beatBoost),
+            0.08
+        );
+
         // Rotate Nebula
         if (this.mesh) {
             this.mesh.rotation.y = time * 0.01;
@@ -248,6 +318,17 @@ export class NebulaBackground {
         // Animate Dust
         if (this.dust) {
             this.dust.rotation.y = time * 0.02;
+            const posAttr = this.dust.geometry.attributes.position;
+            const speedAttr = this.dust.geometry.attributes.speed;
+            for (let i = 0; i < posAttr.count; i++) {
+                const idx = i * 3;
+                const s = speedAttr.array[i];
+                posAttr.array[idx] += Math.sin(time * 0.05 + s * 10.0) * 0.02;
+                posAttr.array[idx + 1] += Math.cos(time * 0.04 + s * 6.0) * 0.015;
+                posAttr.array[idx + 2] += Math.sin(time * 0.03 + s * 8.0) * 0.02;
+            }
+            posAttr.needsUpdate = true;
+            this.dust.material.opacity = 0.45 + (audioData.realtimeEnergy || 0) * 0.4;
         }
     }
 }

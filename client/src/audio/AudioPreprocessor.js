@@ -7,9 +7,10 @@ export class AudioPreprocessor {
 
     async load(url) {
         const response = await fetch(url);
-        const arrayBuffer = await response.arrayBuffer();
+        const arrayBuffer = await response.clone().arrayBuffer();
         const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-        return audioBuffer;
+        const audioBlob = await response.blob();
+        return { audioBuffer, audioBlob };
     }
 
     analyze(audioBuffer) {

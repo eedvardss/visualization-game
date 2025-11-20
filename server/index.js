@@ -6,10 +6,16 @@ const players = new Map();
 let gameState = 'WAITING'; // WAITING, COUNTDOWN, PLAYING
 let countdownTimer = null;
 let musicStartTime = null;
-let selectedSong = 'Children.mp3'; // Default
+let selectedSong = 'Homecoming.mp3'; // Default
 
 // Song options available
-const AVAILABLE_SONGS = ['Children.mp3', 'Homecoming.mp3'];
+const AVAILABLE_SONGS = [
+  'Homecoming.mp3',
+  'Children.mp3',
+  'killing_me_softly.mp3',
+  'like_a_prayer.mp3',
+  'move_your_body.mp3'
+];
 
 wss.on('connection', (ws) => {
   const id = Math.random().toString(36).substr(2, 9);

@@ -1,227 +1,438 @@
+import { DEFAULT_SONG, SONG_ORDER, getSongDisplayName } from '../utils/songCatalog.js';
+
+const CAR_OPTIONS = [
+    {
+        model: 'mercedes.glb',
+        label: 'Mercedes 190', // Shortened for cleaner UI
+        image: '/assets/cars/mercedes-190.png'
+    },
+    {
+        model: 'Volvo XC60.glb',
+        label: 'Volvo XC60',
+        image: '/assets/cars/volvo-xc60.png'
+    }
+];
+
 export class LobbyUI {
     constructor(network, onStartSingleplayer) {
         this.network = network;
         this.onStartSingleplayer = onStartSingleplayer;
 
-        this.container = null;
-        this.usernameInput = null;
-        this.modelSelect = null;
-        this.joinBtn = null;
-        this.singleplayerBtn = null;
-        this.lobbyPanel = null;
-        this.playerList = null;
-        this.voteList = null;
-        this.readyBtn = null;
+        this.state = {
+            username: '',
+            model: 'mercedes.glb',
+            song: DEFAULT_SONG,
+            isReady: false,
+            songs: [...SONG_ORDER]
+        };
 
-        this.selectedModel = 'mercedes.glb';
-        this.isReady = false;
+        // DOM References
+        this.dom = {};
 
-        this.init();
+        this._injectStyles();
+        this._initDOM();
     }
 
-    init() {
-        this.container = document.createElement('div');
-        this.container.style.position = 'absolute';
-        this.container.style.top = '0';
-        this.container.style.left = '0';
-        this.container.style.width = '100%';
-        this.container.style.height = '100%';
-        this.container.style.background = 'rgba(0,0,0,0.85)';
-        this.container.style.color = 'white';
-        this.container.style.display = 'flex';
-        this.container.style.flexDirection = 'column';
-        this.container.style.alignItems = 'center';
-        this.container.style.justifyContent = 'center';
-        this.container.style.zIndex = '20000';
-        this.container.style.fontFamily = 'Arial, sans-serif';
-        document.body.appendChild(this.container);
+    // --- 1. THE "SWISS MINIMALIST" STYLE SYSTEM ---
+    _injectStyles() {
+        const cssId = 'ccr-lobby-styles';
+        if (document.getElementById(cssId)) return;
 
-        // LOGIN SCREEN
-        this.loginPanel = document.createElement('div');
-        this.loginPanel.style.textAlign = 'center';
-        this.container.appendChild(this.loginPanel);
+        const style = document.createElement('style');
+        style.id = cssId;
+        style.textContent = `
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;500;800&display=swap');
 
-        const title = document.createElement('h1');
-        title.innerText = 'MUSIC DRIFT ARENA';
-        title.style.fontSize = '60px';
-        title.style.marginBottom = '40px';
-        title.style.textShadow = '0 0 20px #00ffff';
-        this.loginPanel.appendChild(title);
+            :root {
+                --glass-surface: rgba(255, 255, 255, 0.65);
+                --glass-border: rgba(255, 255, 255, 0.4);
+                --surface-hover: rgba(255, 255, 255, 0.8);
+                --text-main: #111111;
+                --text-sub: #666666;
+                --accent: #111111; /* Solid Black for sleekness */
+                --accent-hover: #333333;
+                --radius-lg: 32px;
+                --radius-sm: 12px;
+                --shadow-soft: 0 20px 60px rgba(0,0,0,0.1);
+            }
 
-        this.usernameInput = document.createElement('input');
-        this.usernameInput.placeholder = 'Enter Username';
-        this.usernameInput.style.padding = '10px';
-        this.usernameInput.style.fontSize = '20px';
-        this.usernameInput.style.marginBottom = '20px';
-        this.usernameInput.style.display = 'block';
-        this.usernameInput.style.margin = '0 auto 20px auto';
-        this.loginPanel.appendChild(this.usernameInput);
+            /* Root: Transparent to show the 3D Map */
+            #ccr-root {
+                position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+                font-family: 'Inter', sans-serif;
+                color: var(--text-main);
+                display: flex; align-items: center; justify-content: center;
+                z-index: 20000;
+                /* Subtle vignette to focus eye on center, but keep map visible */
+                background: radial-gradient(circle, rgba(0,0,0,0) 0%, rgba(0,0,0,0.3) 100%);
+            }
 
-        // Car Selection
-        const carTitle = document.createElement('h3');
-        carTitle.innerText = 'Select Car';
-        this.loginPanel.appendChild(carTitle);
+            /* Main Frosted Card */
+            .ccr-panel {
+                position: relative;
+                width: min(480px, 90%); /* Narrower, mobile-app feel */
+                max-height: 90vh;
+                overflow-y: auto;
+                
+                /* The "Apple Vision Pro" Glass Effect */
+                background: var(--glass-surface);
+                backdrop-filter: blur(40px) saturate(180%);
+                -webkit-backdrop-filter: blur(40px) saturate(180%);
+                border: 1px solid var(--glass-border);
+                
+                border-radius: var(--radius-lg);
+                padding: 48px;
+                box-shadow: var(--shadow-soft);
+                display: flex; flex-direction: column; align-items: center;
+                animation: driftUp 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+            }
 
-        const carContainer = document.createElement('div');
-        carContainer.style.display = 'flex';
-        carContainer.style.gap = '20px';
-        carContainer.style.justifyContent = 'center';
-        carContainer.style.marginBottom = '30px';
-        this.loginPanel.appendChild(carContainer);
+            /* Typography */
+            .ccr-title {
+                font-size: 32px;
+                font-weight: 800;
+                letter-spacing: -0.05em;
+                margin: 0 0 8px 0;
+                text-align: center;
+                color: var(--text-main);
+            }
 
-        ['mercedes.glb', 'Volvo XC60.glb'].forEach(model => {
-            const btn = document.createElement('div');
-            btn.innerText = model.replace('.glb', '');
-            btn.style.padding = '15px';
-            btn.style.border = '2px solid #444';
-            btn.style.cursor = 'pointer';
-            btn.style.borderRadius = '8px';
-            btn.onclick = () => {
-                this.selectedModel = model;
-                Array.from(carContainer.children).forEach(c => c.style.borderColor = '#444');
-                btn.style.borderColor = '#00ffff';
-            };
-            if (model === this.selectedModel) btn.style.borderColor = '#00ffff';
-            carContainer.appendChild(btn);
+            .ccr-subtitle {
+                font-size: 13px;
+                font-weight: 500;
+                color: var(--text-sub);
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                margin-bottom: 40px;
+            }
+
+            .ccr-label {
+                font-size: 12px;
+                font-weight: 600;
+                color: var(--text-sub);
+                margin-bottom: 12px;
+                width: 100%; text-align: left;
+                display: block;
+            }
+
+            /* Inputs */
+            .ccr-input {
+                background: rgba(255,255,255,0.5);
+                border: none;
+                border-radius: 16px;
+                padding: 16px;
+                width: 100%;
+                font-family: 'Inter', sans-serif;
+                font-size: 16px;
+                font-weight: 500;
+                color: var(--text-main);
+                margin-bottom: 24px;
+                transition: all 0.2s;
+            }
+            .ccr-input:focus {
+                outline: none;
+                background: #fff;
+                box-shadow: 0 0 0 2px var(--text-main);
+            }
+            .ccr-input::placeholder { color: #999; }
+
+            /* Car Selection - Minimal Horizontal Scroll */
+            .ccr-grid { 
+                display: grid; 
+                grid-template-columns: 1fr 1fr; 
+                gap: 16px; 
+                width: 100%; 
+                margin-bottom: 32px; 
+            }
+            
+            .ccr-card {
+                background: rgba(255,255,255,0.3);
+                border-radius: 20px;
+                padding: 12px;
+                cursor: pointer;
+                transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+                border: 2px solid transparent;
+                display: flex; flex-direction: column; align-items: center;
+            }
+            .ccr-card:hover { background: rgba(255,255,255,0.6); }
+            
+            .ccr-card.active {
+                background: #fff;
+                border-color: var(--text-main);
+                transform: translateY(-4px);
+                box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+            }
+            
+            .ccr-card img {
+                width: 100%; height: 80px; object-fit: contain;
+                margin-bottom: 8px;
+                /* Slight drop shadow on the car image itself */
+                filter: drop-shadow(0 10px 10px rgba(0,0,0,0.2));
+            }
+            
+            .ccr-card span { font-size: 12px; font-weight: 600; }
+
+            /* Select Dropdown */
+            .ccr-select-wrap { position: relative; width: 100%; margin-bottom: 32px; }
+            .ccr-select {
+                width: 100%; padding: 16px;
+                background: rgba(255,255,255,0.5);
+                border: none; border-radius: 16px;
+                font-family: 'Inter'; font-weight: 500; font-size: 15px;
+                appearance: none; cursor: pointer;
+            }
+            .ccr-select-arrow {
+                position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+                pointer-events: none; font-size: 10px; color: var(--text-main);
+            }
+
+            /* Buttons - The "Pill" Style */
+            .ccr-btn-group { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+            
+            .ccr-btn {
+                padding: 18px;
+                border-radius: 99px; /* Pill shape */
+                border: none;
+                font-family: 'Inter', sans-serif;
+                font-weight: 600;
+                font-size: 15px;
+                cursor: pointer;
+                transition: transform 0.1s;
+                width: 100%;
+            }
+            .ccr-btn:active { transform: scale(0.98); }
+
+            .ccr-btn-primary {
+                background: var(--text-main);
+                color: #fff;
+            }
+            .ccr-btn-secondary {
+                background: transparent;
+                color: var(--text-main);
+                border: 1px solid rgba(0,0,0,0.1);
+            }
+            .ccr-btn-secondary:hover { background: rgba(0,0,0,0.05); }
+
+            /* Lobby List Styles */
+            .ccr-list { width: 100%; margin-bottom: 24px; }
+            .ccr-row {
+                display: flex; justify-content: space-between; align-items: center;
+                padding: 12px 0;
+                border-bottom: 1px solid rgba(0,0,0,0.06);
+                font-size: 14px;
+            }
+            .ccr-tag {
+                font-size: 10px; font-weight: 700; 
+                padding: 4px 8px; border-radius: 6px;
+                background: #eee; color: #999;
+            }
+            .ccr-tag.ready { background: var(--text-main); color: #fff; }
+
+            @keyframes driftUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+            
+            /* Scrollbar cleanup */
+            ::-webkit-scrollbar { width: 0px; background: transparent; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    _el(tag, className, content = '', attributes = {}) {
+        const el = document.createElement(tag);
+        if (className) el.className = className;
+        if (content instanceof HTMLElement) el.appendChild(content);
+        else el.innerHTML = content;
+        Object.entries(attributes).forEach(([k, v]) => {
+            if (k.startsWith('on')) el[k] = v;
+            else el.setAttribute(k, v);
         });
+        return el;
+    }
+
+    _initDOM() {
+        this.dom.root = this._el('div', '', '', { id: 'ccr-root' });
+        const panel = this._el('div', 'ccr-panel');
+        
+        // Minimal Header
+        panel.appendChild(this._el('h1', 'ccr-title', 'CHIPI CHAPA<br>RACING'));
+        panel.appendChild(this._el('div', 'ccr-subtitle', 'Select your machine'));
+
+        // --- LOGIN VIEW ---
+        this.dom.loginView = this._el('div', '', '', { style: 'width: 100%;' });
+        
+        // Username
+        this.dom.loginView.appendChild(this._el('span', 'ccr-label', 'Driver Name'));
+        this.dom.usernameInput = this._el('input', 'ccr-input', '', { placeholder: 'Enter name', maxlength: 12 });
+        this.dom.usernameInput.addEventListener('input', (e) => this.state.username = e.target.value);
+        this.dom.loginView.appendChild(this.dom.usernameInput);
+
+        // Car Grid
+        this.dom.carGrid = this._el('div', 'ccr-grid');
+        this._renderCarOptions();
+        this.dom.loginView.appendChild(this.dom.carGrid);
+
+        // Song Select
+        this.dom.loginView.appendChild(this._el('span', 'ccr-label', 'Starting Track'));
+        const selectWrap = this._el('div', 'ccr-select-wrap');
+        this.dom.songSelect = this._el('select', 'ccr-select');
+        this.dom.songSelect.addEventListener('change', (e) => this.state.song = e.target.value);
+        this._renderSongOptions();
+        selectWrap.appendChild(this.dom.songSelect);
+        selectWrap.appendChild(this._el('div', 'ccr-select-arrow', '▼'));
+        this.dom.loginView.appendChild(selectWrap);
 
         // Buttons
-        this.joinBtn = document.createElement('button');
-        this.joinBtn.innerText = 'JOIN LOBBY';
-        this.joinBtn.style.padding = '15px 40px';
-        this.joinBtn.style.fontSize = '24px';
-        this.joinBtn.style.background = '#00ffff';
-        this.joinBtn.style.border = 'none';
-        this.joinBtn.style.cursor = 'pointer';
-        this.joinBtn.style.marginRight = '20px';
-        this.joinBtn.onclick = () => this.joinLobby();
-        this.loginPanel.appendChild(this.joinBtn);
+        const btnGroup = this._el('div', 'ccr-btn-group');
+        btnGroup.appendChild(this._el('button', 'ccr-btn ccr-btn-primary', 'Join Lobby', { onclick: () => this.joinLobby() }));
+        btnGroup.appendChild(this._el('button', 'ccr-btn ccr-btn-secondary', 'Singleplayer', { onclick: () => this.startSinglePlayer() }));
+        this.dom.loginView.appendChild(btnGroup);
+        
+        panel.appendChild(this.dom.loginView);
 
-        this.singleplayerBtn = document.createElement('button');
-        this.singleplayerBtn.innerText = 'SINGLEPLAYER';
-        this.singleplayerBtn.style.padding = '15px 40px';
-        this.singleplayerBtn.style.fontSize = '24px';
-        this.singleplayerBtn.style.background = '#ff00ff';
-        this.singleplayerBtn.style.border = 'none';
-        this.singleplayerBtn.style.cursor = 'pointer';
-        this.singleplayerBtn.onclick = () => {
-            this.hide();
-            this.onStartSingleplayer(this.selectedModel);
-        };
-        this.loginPanel.appendChild(this.singleplayerBtn);
+        // --- LOBBY VIEW (Hidden) ---
+        this.dom.lobbyView = this._el('div', '', '', { style: 'width: 100%; display: none;' });
+        
+        // Player List Section
+        this.dom.lobbyView.appendChild(this._el('span', 'ccr-label', 'Drivers Connected'));
+        this.dom.playerList = this._el('div', 'ccr-list');
+        this.dom.lobbyView.appendChild(this.dom.playerList);
 
-        // LOBBY SCREEN (Hidden initially)
-        this.lobbyPanel = document.createElement('div');
-        this.lobbyPanel.style.display = 'none';
-        this.lobbyPanel.style.width = '800px';
-        this.lobbyPanel.style.textAlign = 'center';
-        this.container.appendChild(this.lobbyPanel);
+        // Vote Section
+        this.dom.lobbyView.appendChild(this._el('span', 'ccr-label', 'Track Voting'));
+        this.dom.voteList = this._el('div', 'ccr-list');
+        this.dom.lobbyView.appendChild(this.dom.voteList);
 
-        const lobbyTitle = document.createElement('h2');
-        lobbyTitle.innerText = 'LOBBY';
-        this.lobbyPanel.appendChild(lobbyTitle);
+        // Ready Button
+        this.dom.readyBtn = this._el('button', 'ccr-btn ccr-btn-primary', 'Mark Ready', { 
+            style: 'margin-top: 20px;',
+            onclick: () => this.toggleReady() 
+        });
+        this.dom.lobbyView.appendChild(this.dom.readyBtn);
 
-        const contentRow = document.createElement('div');
-        contentRow.style.display = 'flex';
-        contentRow.style.justifyContent = 'space-between';
-        contentRow.style.marginTop = '30px';
-        this.lobbyPanel.appendChild(contentRow);
+        panel.appendChild(this.dom.lobbyView);
+        this.dom.root.appendChild(panel);
+        document.body.appendChild(this.dom.root);
+    }
 
-        // Player List
-        const leftCol = document.createElement('div');
-        leftCol.style.width = '45%';
-        leftCol.innerHTML = '<h3>Players</h3>';
-        this.playerList = document.createElement('div');
-        this.playerList.style.textAlign = 'left';
-        leftCol.appendChild(this.playerList);
-        contentRow.appendChild(leftCol);
+    _renderCarOptions() {
+        this.dom.carGrid.innerHTML = '';
+        CAR_OPTIONS.forEach(opt => {
+            const isActive = this.state.model === opt.model;
+            const card = this._el('div', `ccr-card ${isActive ? 'active' : ''}`);
+            
+            const img = this._el('img', '', '', { src: opt.image });
+            const label = this._el('span', '', opt.label);
 
-        // Song Voting
-        const rightCol = document.createElement('div');
-        rightCol.style.width = '45%';
-        rightCol.innerHTML = '<h3>Vote Song</h3>';
-        this.voteList = document.createElement('div');
-        rightCol.appendChild(this.voteList);
-        contentRow.appendChild(rightCol);
+            card.onclick = () => {
+                this.state.model = opt.model;
+                this._renderCarOptions();
+            };
 
-        this.readyBtn = document.createElement('button');
-        this.readyBtn.innerText = 'NOT READY';
-        this.readyBtn.style.marginTop = '40px';
-        this.readyBtn.style.padding = '20px 50px';
-        this.readyBtn.style.fontSize = '28px';
-        this.readyBtn.style.background = '#555';
-        this.readyBtn.style.color = 'white';
-        this.readyBtn.style.border = 'none';
-        this.readyBtn.style.cursor = 'pointer';
-        this.readyBtn.onclick = () => this.toggleReady();
-        this.lobbyPanel.appendChild(this.readyBtn);
+            card.appendChild(img);
+            card.appendChild(label);
+            this.dom.carGrid.appendChild(card);
+        });
+    }
+
+    _renderSongOptions() {
+        this.dom.songSelect.innerHTML = '';
+        this.state.songs.forEach(song => {
+            const option = this._el('option', '', getSongDisplayName(song), { value: song });
+            this.dom.songSelect.appendChild(option);
+        });
+        this.dom.songSelect.value = this.state.song;
     }
 
     joinLobby() {
-        const username = this.usernameInput.value || 'Racer';
-        this.network.sendJoinLobby(username, this.selectedModel);
-        this.loginPanel.style.display = 'none';
-        this.lobbyPanel.style.display = 'block';
+        const name = this.state.username || `Driver ${Math.floor(Math.random()*99)}`;
+        this.network.sendJoinLobby(name, this.state.model);
+        
+        this.dom.loginView.style.display = 'none';
+        this.dom.lobbyView.style.display = 'block';
+    }
+
+    startSinglePlayer() {
+        this.dom.root.style.opacity = '0';
+        this.dom.root.style.transition = 'opacity 0.4s ease';
+        setTimeout(() => {
+            this.dom.root.style.display = 'none';
+            this.onStartSingleplayer(this.state.model, this.state.song);
+        }, 400);
     }
 
     toggleReady() {
-        this.isReady = !this.isReady;
-        this.readyBtn.innerText = this.isReady ? 'READY!' : 'NOT READY';
-        this.readyBtn.style.background = this.isReady ? '#00ff00' : '#555';
-        this.network.sendReady(this.isReady);
+        this.state.isReady = !this.state.isReady;
+        const btn = this.dom.readyBtn;
+        
+        if (this.state.isReady) {
+            btn.innerText = 'Ready';
+            btn.style.background = '#ddd';
+            btn.style.color = '#999';
+        } else {
+            btn.innerText = 'Mark Ready';
+            btn.style.background = 'var(--text-main)';
+            btn.style.color = '#fff';
+        }
+        
+        this.network.sendReady(this.state.isReady);
     }
 
     updateLobby(players, votes) {
-        // Update Player List
-        this.playerList.innerHTML = '';
+        // Update Players
+        this.dom.playerList.innerHTML = '';
         players.forEach(p => {
-            const div = document.createElement('div');
-            div.style.padding = '10px';
-            div.style.borderBottom = '1px solid #333';
-            div.style.color = p.isReady ? '#00ff00' : '#aaa';
-            div.innerText = `${p.username} (${p.isReady ? 'READY' : 'WAITING'})`;
-            this.playerList.appendChild(div);
+            const row = this._el('div', 'ccr-row');
+            row.innerHTML = `
+                <span>${p.username}</span>
+                <span class="ccr-tag ${p.isReady ? 'ready' : ''}">${p.isReady ? 'READY' : 'WAITING'}</span>
+            `;
+            this.dom.playerList.appendChild(row);
         });
 
-        // Update Vote List
-        this.voteList.innerHTML = '';
-        this.network.songs.forEach(song => {
+        // Update Votes
+        this.dom.voteList.innerHTML = '';
+        (this.network.songs || this.state.songs).forEach(song => {
             const count = votes ? votes[song] || 0 : 0;
-            const div = document.createElement('div');
-            div.style.padding = '10px';
-            div.style.display = 'flex';
-            div.style.justifyContent = 'space-between';
-            div.style.alignItems = 'center';
-
-            const name = document.createElement('span');
-            name.innerText = song;
-
-            const btn = document.createElement('button');
-            btn.innerText = `Vote (${count})`;
-            btn.onclick = () => this.network.sendVote(song);
-
-            // Preview Audio
-            const previewBtn = document.createElement('button');
-            previewBtn.innerText = '▶';
-            previewBtn.style.marginLeft = '10px';
-            previewBtn.onclick = () => {
-                const audio = new Audio(`/assets/music/${song}`);
-                audio.volume = 0.5;
-                audio.play();
-                setTimeout(() => audio.pause(), 5000);
+            const row = this._el('div', 'ccr-row');
+            
+            // Simple clickable row for voting
+            row.style.cursor = 'pointer';
+            row.onclick = () => this.network.sendVote(song);
+            
+            row.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <button style="background:none; border:none; cursor:pointer; font-size:14px;">▶</button>
+                    <span>${getSongDisplayName(song)}</span>
+                </div>
+                <span style="font-weight:bold;">${count > 0 ? count : ''}</span>
+            `;
+            
+            // Bind audio preview to the play button specifically
+            const playBtn = row.querySelector('button');
+            playBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.previewAudio(song);
             };
 
-            div.appendChild(name);
-            const btnGroup = document.createElement('div');
-            btnGroup.appendChild(btn);
-            btnGroup.appendChild(previewBtn);
-            div.appendChild(btnGroup);
-
-            this.voteList.appendChild(div);
+            if (count > 0) row.style.fontWeight = 'bold';
+            
+            this.dom.voteList.appendChild(row);
         });
     }
 
+    previewAudio(song) {
+        if (this.currentAudio) this.currentAudio.pause();
+        this.currentAudio = new Audio(`/assets/music/${song}`);
+        this.currentAudio.volume = 0.4;
+        this.currentAudio.play().catch(() => {});
+        setTimeout(() => { if(this.currentAudio) this.currentAudio.pause(); }, 5000);
+    }
+
+    setSongs(songs) {
+        if (songs && songs.length) this.state.songs = songs;
+        this._renderSongOptions();
+    }
+
     hide() {
-        this.container.style.display = 'none';
+        this.dom.root.style.display = 'none';
     }
 }

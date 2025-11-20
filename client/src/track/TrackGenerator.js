@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 export class TrackGenerator {
     constructor(scene) {
@@ -7,6 +8,20 @@ export class TrackGenerator {
         this.mesh = null;
         this.material = null;
         this.frenetFrames = null;
+        this.roadWidth = 0;
+
+        this.guardrailLoader = new GLTFLoader();
+        this.guardrailGroup = new THREE.Group();
+        this.scene.add(this.guardrailGroup);
+
+        this.guardrailTemplate = null;
+        this.guardrailSpacing = 6;
+        this.guardrailBaseOffset = 0;
+        this.guardrailHalfWidth = 0.2;
+
+        this.GUARDRAIL_VERTICAL_LIFT = 0.05;
+        this.GUARDRAIL_SPACING_OVERLAP = 0.9;
+        this.GUARDRAIL_ROAD_OVERLAP = 0.05;
     }
 
     generate() {
@@ -48,6 +63,7 @@ export class TrackGenerator {
 
         // ======== 3. ROAD SHAPE (RECTANGLE, CENTERED) ================
         const roadWidth = 15;
+        this.roadWidth = roadWidth;
         const roadThickness = 0.6;
 
         const shape = new THREE.Shape();
@@ -145,44 +161,101 @@ export class TrackGenerator {
         this.mesh.receiveShadow = true;
         this.scene.add(this.mesh);
 
-        // ======== 5. SIMPLE POSTS AS GUARDS ==========================
-
-        const postGeo = new THREE.BoxGeometry(0.5, 2, 0.5);
-        const postMat = new THREE.MeshStandardMaterial({
-            color: 0xff00ff,
-            emissive: 0xff00ff,
-            emissiveIntensity: 0.8
-        });
-
-        const postCount = 200;
-        const posts = new THREE.InstancedMesh(postGeo, postMat, postCount * 2);
-        const dummy = new THREE.Object3D();
-
-        for (let i = 0; i < postCount; i++) {
-            const t = i / postCount;
-
-            const point = this.curve.getPointAt(t);
-            const idx = Math.floor(t * (segments - 1));
-            const tangent = this.frenetFrames.tangents[idx];
-            const normal = this.frenetFrames.normals[idx];
-
-            // left
-            let p = point.clone().add(normal.clone().multiplyScalar(-roadWidth / 2 - 0.5));
-            dummy.position.copy(p);
-            dummy.lookAt(p.clone().add(tangent));
-            dummy.updateMatrix();
-            posts.setMatrixAt(i * 2, dummy.matrix);
-
-            // right
-            p = point.clone().add(normal.clone().multiplyScalar(roadWidth / 2 + 0.5));
-            dummy.position.copy(p);
-            dummy.lookAt(p.clone().add(tangent));
-            dummy.updateMatrix();
-            posts.setMatrixAt(i * 2 + 1, dummy.matrix);
-        }
-
-        this.scene.add(posts);
+        // ======== 5. GUARDRAIL MODEL INSTANCES =======================
+        this.loadGuardrails();
 
         return { curve: this.curve, frames: this.frenetFrames };
+    }
+
+    loadGuardrails() {
+        if (!this.curve || !this.frenetFrames) return;
+
+        if (this.guardrailTemplate) {
+            this.buildGuardrailInstances();
+            return;
+        }
+
+        this.guardrailLoader.load(
+            '/assets/models/guardrail_and_terminal.glb',
+            (gltf) => {
+                const template = gltf.scene;
+                template.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+
+                template.updateMatrixWorld(true);
+                const bbox = new THREE.Box3().setFromObject(template);
+                const size = bbox.getSize(new THREE.Vector3());
+                const segmentLength = size.x;
+
+                if (segmentLength > 0) {
+                    this.guardrailSpacing = segmentLength * this.GUARDRAIL_SPACING_OVERLAP;
+                }
+                this.guardrailBaseOffset = -bbox.min.y;
+                this.guardrailHalfWidth = size.z * 0.5;
+
+                this.guardrailTemplate = template;
+                this.buildGuardrailInstances();
+            },
+            undefined,
+            (error) => {
+                console.error('Failed to load guardrail model:', error);
+            }
+        );
+    }
+
+    buildGuardrailInstances() {
+        if (!this.guardrailTemplate || !this.curve || !this.frenetFrames) return;
+
+        this.guardrailGroup.clear();
+
+        const totalLength = this.curve.getLength();
+        const frameCount = this.frenetFrames.tangents.length;
+        const guardCenterOffset =
+            this.roadWidth / 2 +
+            this.guardrailHalfWidth -
+            this.GUARDRAIL_ROAD_OVERLAP;
+        const lateralOffsets = [-guardCenterOffset, guardCenterOffset];
+        const spacing = Math.max(this.guardrailSpacing, 1);
+
+        const tangentVec = new THREE.Vector3();
+        const normalVec = new THREE.Vector3();
+        const upVec = new THREE.Vector3();
+        const offsetVec = new THREE.Vector3();
+        const lookTarget = new THREE.Vector3();
+        const lookMatrix = new THREE.Matrix4();
+        const tempQuat = new THREE.Quaternion();
+
+        for (let dist = 0; dist < totalLength; dist += spacing) {
+            const t = (dist / totalLength) % 1;
+            const point = this.curve.getPointAt(t);
+            const frameIdx = Math.floor(t * (frameCount - 1));
+
+            tangentVec.copy(this.frenetFrames.tangents[frameIdx]).normalize();
+            normalVec.copy(this.frenetFrames.normals[frameIdx]).normalize();
+            upVec.copy(this.frenetFrames.binormals[frameIdx]).negate().normalize();
+
+            for (const lateral of lateralOffsets) {
+                const guard = this.guardrailTemplate.clone(true);
+
+                offsetVec.copy(normalVec).multiplyScalar(lateral);
+                guard.position.copy(point).add(offsetVec);
+                guard.position.addScaledVector(
+                    upVec,
+                    this.guardrailBaseOffset + this.GUARDRAIL_VERTICAL_LIFT
+                );
+
+                lookTarget.copy(guard.position).add(tangentVec);
+                lookMatrix.lookAt(guard.position, lookTarget, upVec);
+                tempQuat.setFromRotationMatrix(lookMatrix);
+                guard.quaternion.copy(tempQuat);
+                guard.rotateY(-Math.PI / 2);
+
+                this.guardrailGroup.add(guard);
+            }
+        }
     }
 }
