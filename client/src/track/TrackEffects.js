@@ -285,14 +285,20 @@ export class TrackEffects {
 
             let beat = 0;
             if (audioData.timelineEvent && audioData.timelineEvent.type === 'beat') {
-                beat = 1.0;
-                this.spawnShockwave(); // Spawn ring on beat
+                // Use the intensity from the analysis file (0-1), with a fallback
+                const intensity = audioData.timelineEvent.intensity || 1.0;
+                beat = intensity; 
+                
+                // Only spawn shockwave if intensity is significant
+                if (intensity > 0.4) {
+                    this.spawnShockwave();
+                }
             }
 
             this.material.uniforms.uBeat.value = THREE.MathUtils.lerp(
                 this.material.uniforms.uBeat.value,
                 beat,
-                0.1
+                0.15 // Slightly sharper attack
             );
         }
 

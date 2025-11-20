@@ -41,6 +41,10 @@ function normalizeAudioFeatures(raw) {
 }
 
 async function init() {
+    // Hoist variables that might be accessed by PauseMenu callbacks before initialization
+    let gainNode = null;
+    let nebula = null;
+
     // ===========================
     // UI OVERLAY & LOBBY
     // ===========================
@@ -65,6 +69,50 @@ async function init() {
     const graphics = new Graphics(currentAudioFeatures);
 
     // ===========================
+    // PAUSE MENU
+    // ===========================
+    const pauseMenu = new PauseMenu({
+        onResume: () => {
+            // Resume game logic if needed
+        },
+        onMainMenu: () => {
+            window.location.reload();
+        },
+        onVolumeChange: (vol) => {
+            if (typeof gainNode !== 'undefined' && gainNode) {
+                gainNode.gain.value = vol;
+            }
+        },
+        onEffectsChange: (strength) => {
+            if (graphics) {
+                graphics.setBloomStrength(strength);
+            }
+        },
+        onColorChange: (hue) => {
+            // hue is 0-360
+            if (typeof nebula !== 'undefined' && nebula) {
+                nebula.setHue(hue);
+            }
+        }
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            pauseMenu.toggle();
+        }
+    });
+
+    // Apply initial settings to graphics immediately
+    if (pauseMenu.settings) {
+        // Bloom/Effects
+        const effectStrength = pauseMenu.settings.effects / 50;
+        graphics.setBloomStrength(effectStrength);
+        
+        // Note: Nebula is created after this block in original code, 
+        // but we can set the initial hue on it when it is created below or right after.
+    }
+
+    // ===========================
     // TRACK GENERATION
     // ===========================
     const trackGen = new TrackGenerator(graphics.scene);
@@ -73,7 +121,12 @@ async function init() {
     const frenetFrames = trackData.frames;
     const trackMesh = trackGen.mesh;
     const trackEffects = new TrackEffects(trackGen.mesh);
-    const nebula = new NebulaBackground(graphics.scene, graphics.skyPalette);
+    nebula = new NebulaBackground(graphics.scene, graphics.skyPalette);
+    
+    // Apply saved color to nebula (now that nebula exists)
+    if (pauseMenu.settings) {
+        nebula.setHue(pauseMenu.settings.color);
+    }
 
     // ===========================
     // AUDIO PRE-PROCESSOR
@@ -83,7 +136,7 @@ async function init() {
     let audioTimeline = null;
     let audioSource = null;
     let audioAnalyser = null;
-    let gainNode = null;
+    // gainNode is declared at top of init
     let audioStartTime = 0;
     let lastAudioTime = 0;
 
@@ -242,40 +295,6 @@ async function init() {
         if (song) loadMusic(song);
     };
 
-    // ===========================
-    // PAUSE MENU
-    // ===========================
-    const pauseMenu = new PauseMenu({
-        onResume: () => {
-            // Resume game logic if needed
-        },
-        onMainMenu: () => {
-            window.location.reload();
-        },
-        onVolumeChange: (vol) => {
-            if (gainNode) {
-                gainNode.gain.value = vol;
-            }
-        },
-        onEffectsChange: (strength) => {
-            if (graphics) {
-                graphics.setBloomStrength(strength);
-            }
-        },
-        onColorChange: (hue) => {
-            // hue is 0-360
-            if (nebula) {
-                nebula.setHue(hue);
-            }
-        }
-    });
-
-    window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') {
-            pauseMenu.toggle();
-        }
-    });
-
     network.connect();
 
     function spawnLocalCar(model) {
@@ -298,7 +317,13 @@ async function init() {
 
         // Create GainNode
         gainNode = audioPreprocessor.audioContext.createGain();
-        gainNode.gain.value = 0.3; // Default volume lower
+        
+        // Apply initial volume from pause menu settings if available
+        if (pauseMenu && pauseMenu.settings) {
+            gainNode.gain.value = pauseMenu.settings.volume / 100;
+        } else {
+            gainNode.gain.value = 0.3; // Fallback
+        }
 
         // Connect: Source -> Analyser -> Gain -> Destination
         audioSource.connect(audioAnalyser);
@@ -368,8 +393,14 @@ async function init() {
             );
 
             if (events.length > 0) {
+                // Prioritize beat events, and respect the pre-analyzed intensity
+                // New analysis normalizes intensity 0-1, so we trust it directly
                 const beat = events.find(e => e.type === 'beat');
-                currentAudioData.timelineEvent = beat || events[events.length - 1];
+                if (beat) {
+                    currentAudioData.timelineEvent = beat;
+                } else {
+                    currentAudioData.timelineEvent = events[events.length - 1];
+                }
             }
 
             lastAudioTime = currentAudioTime;
@@ -402,10 +433,12 @@ async function init() {
         // 3. CAMERA SHAKE
         let shake = new THREE.Vector3();
         if (currentAudioData.timelineEvent && currentAudioData.timelineEvent.type === 'beat') {
+            const intensity = currentAudioData.timelineEvent.intensity || 1.0;
+            const shakeAmount = intensity * 0.5; // Scale shake by beat intensity
             shake.set(
-                (Math.random() - 0.5) * 0.5,
-                (Math.random() - 0.5) * 0.5,
-                (Math.random() - 0.5) * 0.5
+                (Math.random() - 0.5) * shakeAmount,
+                (Math.random() - 0.5) * shakeAmount,
+                (Math.random() - 0.5) * shakeAmount
             );
         }
 

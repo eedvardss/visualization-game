@@ -7,6 +7,16 @@ export class PauseMenu {
         this.onColorChange = onColorChange;
         this.isVisible = false;
 
+        // Default Settings
+        this.defaults = {
+            volume: 30,
+            effects: 50,
+            color: 0
+        };
+
+        // Load saved settings
+        this.loadSettings();
+
         this.container = document.createElement('div');
         this.container.style.position = 'absolute';
         this.container.style.top = '0';
@@ -56,29 +66,94 @@ export class PauseMenu {
         settingsHeader.style.marginTop = '10px';
         panel.appendChild(settingsHeader);
 
-        const volumeRow = this.createSliderRow('Volume', 30, (value) => {
+        // VOLUME
+        const volumeRow = this.createSliderRow('Volume', this.settings.volume, (value) => {
+            this.settings.volume = value;
+            this.saveSettings();
             const normalized = value / 100;
             if (this.onVolumeChange) this.onVolumeChange(normalized);
         });
         this.volumeSlider = volumeRow.slider;
         panel.appendChild(volumeRow.row);
 
-        const effectsRow = this.createSliderRow('Effect Strength', 50, (value) => {
+        // EFFECTS
+        const effectsRow = this.createSliderRow('Effect Strength', this.settings.effects, (value) => {
+            this.settings.effects = value;
+            this.saveSettings();
             const normalized = value / 50; // default 1 at 50
             if (this.onEffectsChange) this.onEffectsChange(normalized);
         });
         this.effectsSlider = effectsRow.slider;
         panel.appendChild(effectsRow.row);
 
-        const colorRow = this.createSliderRow('Sky Color', 0, (value) => {
+        // SKY COLOR
+        const colorRow = this.createSliderRow('Sky Color', this.settings.color, (value) => {
+            this.settings.color = value;
+            this.saveSettings();
             if (this.onColorChange) this.onColorChange(value); // 0-360
         });
         colorRow.slider.max = '360';
         this.colorSlider = colorRow.slider;
         panel.appendChild(colorRow.row);
 
+        // RESET BUTTON
+        const resetBtn = this.createButton('Reset Defaults');
+        resetBtn.style.background = 'transparent';
+        resetBtn.style.border = '1px solid rgba(255,255,255,0.3)';
+        resetBtn.style.fontSize = '14px';
+        resetBtn.style.padding = '8px 16px';
+        resetBtn.style.marginTop = '10px';
+        resetBtn.style.color = '#f6fbff'; // Force white text
+        resetBtn.style.boxShadow = 'none'; // Remove default button shadow
+        resetBtn.onmouseover = () => {
+             resetBtn.style.background = 'rgba(255,255,255,0.1)';
+        };
+        resetBtn.onmouseout = () => {
+             resetBtn.style.background = 'transparent';
+        };
+        resetBtn.onclick = () => this.resetDefaults();
+        panel.appendChild(resetBtn);
+
         this.container.appendChild(panel);
         document.body.appendChild(this.container);
+
+        // Apply initial settings
+        this.applySettings();
+    }
+
+    loadSettings() {
+        const stored = localStorage.getItem('recco_settings');
+        if (stored) {
+            this.settings = JSON.parse(stored);
+        } else {
+            this.settings = { ...this.defaults };
+        }
+    }
+
+    saveSettings() {
+        localStorage.setItem('recco_settings', JSON.stringify(this.settings));
+    }
+
+    resetDefaults() {
+        this.settings = { ...this.defaults };
+        this.saveSettings();
+        
+        // Update UI
+        this.volumeSlider.value = this.settings.volume;
+        this.effectsSlider.value = this.settings.effects;
+        this.colorSlider.value = this.settings.color;
+
+        // Apply callbacks
+        this.applySettings();
+    }
+
+    applySettings() {
+        // Volume
+        if (this.onVolumeChange) this.onVolumeChange(this.settings.volume / 100);
+        // Effects
+        if (this.onEffectsChange) this.onEffectsChange(this.settings.effects / 50);
+        // Color
+        if (this.onColorChange) this.onColorChange(this.settings.color);
     }
 
     createButton(label) {

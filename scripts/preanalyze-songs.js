@@ -1,36 +1,52 @@
 const fs = require('fs');
 const path = require('path');
 
-// Simple beat detection (Node.js compatible version)
+// Simple beat detection with Low-Pass Filter to isolate kicks
 function detectBeats(audioData, sampleRate) {
+    // 1. Low Pass Filter (simple RC filter)
+    // Cutoff at 150Hz to isolate kick drums and bass
+    const cutoff = 150; 
+    const rc = 1.0 / (cutoff * 2 * Math.PI);
+    const dt = 1.0 / sampleRate;
+    const alpha = dt / (rc + dt);
+    
+    const bassData = new Float32Array(audioData.length);
+    let lastVal = 0;
+    // Apply filter
+    for (let i = 0; i < audioData.length; i++) {
+        lastVal = lastVal + alpha * (audioData[i] - lastVal);
+        bassData[i] = lastVal;
+    }
+
     const peaks = [];
     const interval = Math.floor(sampleRate / 60); // Check roughly every frame
     
-    // First pass: find max volume to normalize
+    // First pass: find max volume to normalize based on BASS signal only
     let globalMax = 0;
     let sum = 0;
-    // Sample every 100th point for speed in stats calculation
-    for (let i = 0; i < audioData.length; i += 100) {
-        const val = Math.abs(audioData[i]);
+    // Sample every 100th point for speed
+    for (let i = 0; i < bassData.length; i += 100) {
+        const val = Math.abs(bassData[i]);
         if (val > globalMax) globalMax = val;
         sum += val;
     }
-    const globalAvg = sum / (audioData.length / 100);
+    const globalAvg = sum / (bassData.length / 100);
     
     // Dynamic threshold: beats are usually significant peaks relative to the song's range
-    // Using 60% of max volume as a baseline for a "beat"
-    // But ensuring it's at least above average noise
-    const threshold = Math.max(globalMax * 0.5, globalAvg * 2);
+    // Bass is punchier, so we use a slightly higher threshold relative to average noise
+    const threshold = Math.max(globalMax * 0.6, globalAvg * 2.0);
 
-    console.log(`  Stats: Max=${globalMax.toFixed(3)}, Avg=${globalAvg.toFixed(3)}, Threshold=${threshold.toFixed(3)}`);
+    console.log(`  Bass Stats: Max=${globalMax.toFixed(3)}, Avg=${globalAvg.toFixed(3)}, Threshold=${threshold.toFixed(3)}`);
 
     let lastBeatTime = -1;
-    const minBeatInterval = 0.1; // 100ms refractory period to prevent multiple triggers for same beat
+    // 150ms refractory period - kick drums aren't usually faster than this (400 BPM)
+    // This prevents "double triggering" on the tail of a bass boom
+    const minBeatInterval = 0.15; 
 
-    for (let i = 0; i < audioData.length; i += interval) {
+    for (let i = 0; i < bassData.length; i += interval) {
         let max = 0;
-        for (let j = 0; j < interval && i + j < audioData.length; j++) {
-            const val = Math.abs(audioData[i + j]);
+        for (let j = 0; j < interval && i + j < bassData.length; j++) {
+            const val = Math.abs(bassData[i + j]);
             if (val > max) max = val;
         }
         
@@ -41,7 +57,7 @@ function detectBeats(audioData, sampleRate) {
                 peaks.push({
                     time: currentTime,
                     type: 'beat',
-                    // Normalize intensity 0-1 based on song's max volume
+                    // Normalize intensity 0-1 based on song's max BASS volume
                     intensity: Math.min(1.0, max / globalMax) 
                 });
                 lastBeatTime = currentTime;

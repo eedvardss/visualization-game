@@ -40,11 +40,6 @@ export class Car {
                 });
 
                 if (potentialWheels.length >= 4) {
-                    // Sort by Z (Front/Rear) then X (Left/Right)
-                    // Assuming -Z is forward (standard GLTF)
-                    // Front = Min Z, Rear = Max Z
-                    // Left = Positive X, Right = Negative X (or vice versa)
-
                     // Sort by Z
                     potentialWheels.sort((a, b) => a.getWorldPosition(new THREE.Vector3()).z - b.getWorldPosition(new THREE.Vector3()).z);
 
@@ -138,13 +133,19 @@ export class Car {
         this.smokeParticles = [];
         const smokeGeo = new THREE.BufferGeometry();
         smokeGeo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+        
+        // SWITCHING TO SPRITES FOR SMOKE
+        const smokeTexture = this.createSmokeTexture();
         this.smokeMat = new THREE.PointsMaterial({
-            size: 2.4,
-            color: 0xaaaaaa,
+            size: 4.0,
+            map: smokeTexture,
             transparent: true,
-            opacity: 0.9,
+            opacity: 0.3, // Lower opacity for less bright look
             depthWrite: false,
             sizeAttenuation: true,
+            vertexColors: false,
+            blending: THREE.NormalBlending,
+            color: 0xbbbbbb // Slightly darker grey base
         });
         this.smokeSystem = new THREE.Points(smokeGeo, this.smokeMat);
         this.smokeSystem.frustumCulled = false;
@@ -221,6 +222,24 @@ export class Car {
         this.speedLineSystem = new THREE.Points(speedLineGeo, this.speedLineMat);
         this.speedLineSystem.frustumCulled = false;
         this.scene.add(this.speedLineSystem);
+    }
+
+    createSmokeTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)'); // Reduced from 1.0
+        gradient.addColorStop(0.4, 'rgba(200, 200, 200, 0.4)'); // Darker and more transparent
+        gradient.addColorStop(1, 'rgba(100, 100, 100, 0)');
+        
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 64, 64);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
     }
 
     addNameTag(name) {
@@ -437,49 +456,96 @@ export class Car {
     // DRIFT SMOKE
     //-----------------------------------
     spawnDriftSmoke(carPos, normal, up, intensity) {
-        // spawn around rear wheels
-        const base = carPos.clone().add(up.clone().multiplyScalar(-0.3));
+        // spawn around rear wheels with offset
+        const base = carPos.clone().add(up.clone().multiplyScalar(-0.4));
 
-        const count = 4 + Math.floor(intensity * 6);
+        const count = 2 + Math.floor(intensity * 3); // Fewer but larger particles
         for (let i = 0; i < count; i++) {
-            const offsetSide = (Math.random() < 0.5 ? -1 : 1) * (0.9 + Math.random() * 0.4);
+            const offsetSide = (Math.random() < 0.5 ? -1 : 1) * (0.8 + Math.random() * 0.3);
+            const pos = base.clone().add(normal.clone().multiplyScalar(offsetSide));
+            
+            // Randomize position slightly
+            pos.x += (Math.random() - 0.5) * 0.5;
+            pos.z += (Math.random() - 0.5) * 0.5;
+
             const p = {
-                pos: base.clone().add(normal.clone().multiplyScalar(offsetSide)),
+                pos: pos,
                 vel: new THREE.Vector3(
-                    (Math.random() - 0.5) * 0.6,
-                    0.4 + Math.random() * 0.3,
-                    (Math.random() - 0.5) * 0.6
+                    (Math.random() - 0.5) * 0.5, // Sideways spread
+                    0.5 + Math.random() * 0.8,   // Upward speed (faster initially)
+                    (Math.random() - 0.5) * 0.5  // Forward/Back spread
                 ),
-                life: 1.5,
+                life: 2.0 + Math.random() * 1.0, // Longer life
+                maxLife: 2.0 + Math.random() * 1.0,
+                size: 1.0 + Math.random() * 1.5, // Initial size variation
+                rotation: Math.random() * Math.PI * 2,
+                rotSpeed: (Math.random() - 0.5) * 2.0,
+                opacity: 0.4 + Math.random() * 0.2 // Initial opacity
             };
-            if (this.smokeParticles.length > 500) this.smokeParticles.shift();
+            
+            if (this.smokeParticles.length > 400) this.smokeParticles.shift(); // Limit count
             this.smokeParticles.push(p);
         }
     }
 
     updateSmoke(dt) {
         const positions = [];
+        const sizes = [];
+        const colors = [];
+        const opacities = []; // We'll store opacity in alpha channel or color
+
+        // Reuse arrays or typed arrays would be better for performance in large systems,
+        // but for this count it's fine.
 
         for (let i = this.smokeParticles.length - 1; i >= 0; i--) {
             const p = this.smokeParticles[i];
             p.life -= dt;
+
             if (p.life <= 0) {
                 this.smokeParticles.splice(i, 1);
                 continue;
             }
 
-            p.pos.addScaledVector(p.vel, dt);
-            p.vel.multiplyScalar(0.96);
+            // Physics
+            p.pos.add(p.vel.clone().multiplyScalar(dt));
+            p.vel.y *= 0.95; // Slow down upward
+            p.vel.x *= 0.98; // Drag
+            p.vel.z *= 0.98;
+            p.rotation += p.rotSpeed * dt;
 
+            // Growth
+            const lifeRatio = 1.0 - (p.life / p.maxLife); // 0 to 1
+            const currentSize = p.size * (1.0 + lifeRatio * 4.0); // Grow significantly
+
+            // Fade
+            const alpha = p.opacity * (1.0 - Math.pow(lifeRatio, 3.0)); // Non-linear fade out
+
+            // Update global opacity if we can't do per-particle (PointsMaterial limitation)
+            // Since we can't do per-particle opacity easily without custom shader/attributes,
+            // and we are using a single material, the material opacity affects ALL particles.
+            // This is a limitation of standard THREE.PointsMaterial without vertex colors/alphas.
+            
+            // WORKAROUND: We will just use the base material opacity and let particles die naturally.
+            // Or we can enable vertexColors and set alpha if the material supports it (PointsMaterial does not support alpha per vertex easily in WebGL1/standard three without custom shader hacks).
+            
+            // However, since we want them to fade out, we can simulate it by scaling them down or just accepting they pop out at end of life?
+            // No, "p.life" handles removal.
+            
+            // Better visual hack: We lowered the base opacity to 0.3.
+            // The texture has a gradient.
+            
             positions.push(p.pos.x, p.pos.y, p.pos.z);
         }
-
-        this.smokeSystem.geometry.setAttribute(
-            'position',
-            new THREE.Float32BufferAttribute(positions, 3)
-        );
-        this.smokeSystem.geometry.attributes.position.needsUpdate = true;
-        this.smokeMat.opacity = 0.85;
+        
+        // Update the geometry
+        if (this.smokeSystem && this.smokeSystem.geometry) {
+            this.smokeSystem.geometry.setAttribute(
+                'position',
+                new THREE.Float32BufferAttribute(positions, 3)
+            );
+            this.smokeSystem.geometry.attributes.position.needsUpdate = true;
+            // this.smokeMat.opacity = 0.85; // REMOVE THIS OVERRIDE so our lower 0.3 sticks
+        }
     }
 
     //-----------------------------------

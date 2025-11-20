@@ -313,11 +313,14 @@ export class NebulaBackground {
         // We'll reduce the max intensity and use a softer decay.
 
         if (audioData.timelineEvent && audioData.timelineEvent.type === 'beat') {
-            const target = 0.4;
+            const intensity = audioData.timelineEvent.intensity || 1.0;
+            // Scale target brightness by beat intensity
+            const target = 0.2 + (intensity * 0.3); 
+            
             this.uniforms.uBeat.value = THREE.MathUtils.lerp(
                 this.uniforms.uBeat.value,
                 target,
-                0.35
+                0.4 // Faster attack
             );
         } else {
             this.uniforms.uBeat.value = THREE.MathUtils.lerp(
