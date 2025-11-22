@@ -10,6 +10,7 @@ import { LobbyUI } from './ui/LobbyUI.js';
 import { ReccoBeatsClient } from './audio/ReccoBeatsClient.js';
 import { PauseMenu } from './ui/PauseMenu.js';
 import { DEFAULT_SONG, SONG_LIBRARY } from './utils/songCatalog.js';
+import { RaceResultsUI } from './ui/RaceResultsUI.js';
 
 const FALLBACK_AUDIO_FEATURES = {
     danceability: 0.78,
@@ -61,6 +62,30 @@ async function init() {
     uiOverlay.style.textAlign = 'center';
     uiOverlay.style.zIndex = '9999';
     document.body.appendChild(uiOverlay);
+
+    // Lightweight HUD (laps + race timer)
+    const hud = document.createElement('div');
+    hud.style.position = 'absolute';
+    hud.style.top = '20px';
+    hud.style.left = '20px';
+    hud.style.color = 'white';
+    hud.style.fontFamily = 'Arial, sans-serif';
+    hud.style.fontSize = '22px';
+    hud.style.textShadow = '0 2px 10px rgba(0,0,0,0.6)';
+    hud.style.pointerEvents = 'none';
+    hud.style.zIndex = '9998';
+
+    const lapCounterEl = document.createElement('div');
+    lapCounterEl.innerText = 'Lap 0/0';
+    const finishTimerEl = document.createElement('div');
+    finishTimerEl.style.fontSize = '18px';
+    finishTimerEl.style.marginTop = '6px';
+
+    hud.appendChild(lapCounterEl);
+    hud.appendChild(finishTimerEl);
+    document.body.appendChild(hud);
+
+    const resultsUI = new RaceResultsUI();
 
     // ===========================
     // GRAPHICS + STARFIELD + FOG
@@ -222,17 +247,84 @@ async function init() {
     let localCar = null;
     const remoteCars = new Map();
     let gameState = 'WAITING';
+    let maxLaps = 3;
+    let completedLaps = 0; // completed laps
+    let lapTimes = [];
+    let currentLapStart = null;
+    let lastTrackProgress = null;
+    let finishTimerEndsAt = null;
+    let isSpectating = false;
+    let raceActive = false;
+    let assetsReadySent = false;
+    let spectateTargetId = null;
+
+    function updateLapHud() {
+        if (completedLaps >= maxLaps) {
+            lapCounterEl.innerText = `Finished (${maxLaps}/${maxLaps})`;
+        } else if (raceActive) {
+            const displayLap = Math.min(completedLaps + 1, maxLaps);
+            lapCounterEl.innerText = `Lap ${displayLap}/${maxLaps}`;
+        } else {
+            lapCounterEl.innerText = `Lap 0/${maxLaps}`;
+        }
+    }
+
+    function updateFinishTimerHud() {
+        if (finishTimerEndsAt) {
+            const remaining = Math.max(0, finishTimerEndsAt - Date.now());
+            finishTimerEl.innerText = `Race ends in ${(remaining / 1000).toFixed(1)}s`;
+            if (remaining <= 0) {
+                finishTimerEl.innerText = '';
+                finishTimerEndsAt = null;
+            }
+        } else {
+            finishTimerEl.innerText = '';
+        }
+    }
+
+    function resetRaceState() {
+        completedLaps = 0;
+        lapTimes = [];
+        currentLapStart = null;
+        lastTrackProgress = null;
+        finishTimerEndsAt = null;
+        isSpectating = false;
+        raceActive = false;
+        spectateTargetId = null;
+        assetsReadySent = false;
+        updateLapHud();
+        updateFinishTimerHud();
+    }
+
+    function renderStats(results = []) {
+        resultsUI.show(results, {
+            onClose: () => {
+                if (lobbyUI.show) lobbyUI.show();
+            }
+        });
+        lobbyUI.hide();
+    }
+
+    resetRaceState();
 
     const lobbyUI = new LobbyUI(network, (model, songChoice) => {
         // Singleplayer start
-        spawnLocalCar(model);
+        resetRaceState();
+        raceActive = true;
+        resultsUI.hide(true);
+        spawnLocalCar(model, true);
         gameState = 'PLAYING';
+        currentLapStart = Date.now();
+        lastTrackProgress = localCar ? localCar.trackProgress : 0;
+        updateLapHud();
         const track = songChoice || DEFAULT_SONG;
         loadMusic(track).then(() => startMusic());
     });
 
     network.onInit = (data) => {
         lobbyUI.setSongs(data.songs);
+        maxLaps = data.maxLaps || maxLaps;
+        updateLapHud();
     };
 
     network.onLobbyUpdate = (players, votes) => {
@@ -263,6 +355,30 @@ async function init() {
         });
     };
 
+    network.onPrepareRace = async (data) => {
+        gameState = 'PREPARING';
+        maxLaps = data?.maxLaps || maxLaps;
+        resetRaceState();
+        lobbyUI.hide();
+        uiOverlay.innerText = 'Loading cars...';
+        resultsUI.hide(true);
+
+        try {
+            await spawnLocalCar(lobbyUI.selectedModel, true);
+            uiOverlay.innerText = 'Waiting for others...';
+            if (!assetsReadySent) {
+                assetsReadySent = true;
+                network.sendAssetsReady();
+            }
+        } catch (err) {
+            console.error('Failed to prep local car', err);
+        }
+
+        if (data?.selectedSong) {
+            loadMusic(data.selectedSong);
+        }
+    };
+
     network.onPlayerJoined = (playerData) => {
         if (!remoteCars.has(playerData.id)) {
             const car = new Car(graphics.scene, playerData.color, false, playerData.model);
@@ -277,37 +393,58 @@ async function init() {
             graphics.scene.remove(car.mesh);
             remoteCars.delete(id);
         }
+        if (spectateTargetId === id) spectateTargetId = null;
     };
 
     network.onGameStateChange = (state, startTime) => {
         gameState = state;
 
         if (state === 'WAITING') {
+            raceActive = false;
+            isSpectating = false;
+            resetRaceState();
             uiOverlay.innerText = '';
+            if (lobbyUI.show) lobbyUI.show();
+            resultsUI.hide(true);
             if (audioSource) {
                 audioSource.stop();
                 audioSource = null;
             }
-            // Reset cars?
         } else if (state === 'PLAYING') {
+            raceActive = true;
+            isSpectating = false;
+            completedLaps = 0;
+            lapTimes = [];
+            finishTimerEndsAt = null;
+            maxLaps = network.maxLaps || maxLaps;
+            currentLapStart = startTime || Date.now();
+            lastTrackProgress = localCar ? localCar.trackProgress : 0;
+            updateLapHud();
+            updateFinishTimerHud();
+
             uiOverlay.innerText = 'GO!';
-            setTimeout(() => uiOverlay.innerText = '', 1000);
+            setTimeout(() => {
+                if (uiOverlay.innerText === 'GO!') uiOverlay.innerText = '';
+            }, 1000);
 
             // Start Music Logic
             const songToPlay = network.selectedSong || DEFAULT_SONG;
             loadMusic(songToPlay).then(() => {
-                const delay = startTime - Date.now();
+                const delay = startTime ? startTime - Date.now() : 0;
                 if (delay > 0) setTimeout(() => startMusic(), delay);
                 else startMusic(Math.abs(delay) / 1000);
             });
 
             // Spawn local car if not already
-            if (!localCar) spawnLocalCar(lobbyUI.selectedModel);
+            if (!localCar) spawnLocalCar(lobbyUI.selectedModel, true);
             lobbyUI.hide();
         }
     };
 
     network.onCountdown = (duration, song) => {
+        gameState = 'COUNTDOWN';
+        raceActive = false;
+        updateLapHud();
         let count = duration;
         uiOverlay.innerText = count;
         const interval = setInterval(() => {
@@ -320,61 +457,126 @@ async function init() {
         if (song) loadMusic(song);
     };
 
+    network.onLapUpdate = (playerUpdate) => {
+        // Keep finished flags current for spectating
+        if (playerUpdate.id === network.id && playerUpdate.lap) {
+            completedLaps = Math.max(completedLaps, playerUpdate.lap);
+            updateLapHud();
+        }
+    };
+
+    network.onFinishTimer = (endsAt) => {
+        finishTimerEndsAt = endsAt;
+        updateFinishTimerHud();
+    };
+
+    network.onRaceOver = (results, endsAt) => {
+        finishTimerEndsAt = endsAt || null;
+        resetRaceState();
+        uiOverlay.innerText = '';
+        if (audioSource) {
+            audioSource.stop();
+            audioSource = null;
+        }
+        renderStats(results);
+    };
+
     network.connect();
 
-    function spawnLocalCar(model) {
-        if (localCar) return;
-        
-        // 1. Get Spawn Index from Network or Default to 0
-        // Since network.players map contains us (received from init), we can find our spawnIndex
+    function positionLocalCar(car) {
+        // Get Spawn Index from Network or Default to 0
         const myData = network.players.get(network.id);
         const spawnIndex = myData ? (myData.spawnIndex || 0) : 0;
-        
-        console.log(`Spawning local car. NetworkID: ${network.id}, Index: ${spawnIndex}`);
 
-        localCar = new Car(graphics.scene, 0x00ff00, true, model);
-        
-        // 2. Calculate Grid Position
+        console.log(`Placing local car. NetworkID: ${network.id}, Index: ${spawnIndex}`);
+
         // 3 cars per row
-        // Row 0: 0, 1, 2
-        // Row 1: 3, 4, 5
-        // Spacing: 15 units sideways, 20 units back
-        
         const carsPerRow = 3;
         const row = Math.floor(spawnIndex / carsPerRow);
         const col = spawnIndex % carsPerRow;
-        
-        // Center the column (e.g. if 3 cars: -1, 0, 1. If 2 cars: -0.5, 0.5)
-        // But fixed slots are easier: Left, Center, Right
-        // 0=Left, 1=Center, 2=Right
         const sideOffset = (col - 1) * 5; // Reduced from 15 to fit on track
         const backOffset = row * 20;
 
-        // We need the track start position and direction
-        // Assuming track starts at (0,0,0) looking along +Z or something?
-        // Actually trackGen generates a loop. We usually start at index 0 of the curve.
-        
         const startPoint = trackCurve.getPointAt(0);
         const startTangent = trackCurve.getTangentAt(0);
         const up = new THREE.Vector3(0, 1, 0);
         const right = new THREE.Vector3().crossVectors(startTangent, up).normalize();
-        
-        // Final Position
+
         const spawnPos = startPoint.clone()
             .add(right.multiplyScalar(sideOffset))
-            .add(startTangent.clone().multiplyScalar(-backOffset)) // Move BACKWARDS from start line
-            .add(up.multiplyScalar(2)); // Lift up slightly
+            .add(startTangent.clone().multiplyScalar(-backOffset))
+            .add(up.multiplyScalar(2));
 
-        localCar.mesh.position.copy(spawnPos);
-        localCar.mesh.lookAt(spawnPos.clone().add(startTangent));
-        
-        // Update track progress so we don't snap back to 0 immediately
+        car.mesh.position.copy(spawnPos);
+        car.mesh.lookAt(spawnPos.clone().add(startTangent));
+
         const length = trackCurve.getLength();
         const progressOffset = backOffset / length;
-        localCar.trackProgress = (1.0 - progressOffset) % 1.0;
-        
-        // CRITICAL: Set lateral offset so update() doesn't snap us back to center
-        localCar.lateralOffset = sideOffset;
+        const trackProgress = (1.0 - progressOffset) % 1.0;
+
+        car.resetForRace(trackProgress, sideOffset);
+    }
+
+    async function spawnLocalCar(model, forcePlace = false) {
+        const chosenModel = model || lobbyUI.selectedModel || 'mercedes.glb';
+
+        if (!localCar) {
+            localCar = new Car(graphics.scene, 0x00ff00, true, chosenModel);
+        } else if (forcePlace && chosenModel !== localCar.modelName) {
+            graphics.scene.remove(localCar.mesh);
+            localCar = new Car(graphics.scene, 0x00ff00, true, chosenModel);
+        }
+
+        localCar.modelName = chosenModel;
+        positionLocalCar(localCar);
+        await localCar.waitForReady();
+        lastTrackProgress = localCar.trackProgress;
+        return localCar;
+    }
+
+    function handleLapProgress() {
+        if (!raceActive || !localCar) return;
+        const progress = localCar.trackProgress;
+        if (lastTrackProgress !== null) {
+            const crossedStart = progress < lastTrackProgress - 0.5;
+            if (crossedStart && localCar.speed > 5) {
+                const now = Date.now();
+                const lapTime = currentLapStart ? (now - currentLapStart) / 1000 : 0;
+                completedLaps += 1;
+                lapTimes.push(lapTime);
+                currentLapStart = now;
+                updateLapHud();
+
+                const totalTime = lapTimes.reduce((a, b) => a + b, 0);
+                network.sendLapUpdate(completedLaps, lapTime, totalTime);
+
+                if (completedLaps >= maxLaps) {
+                    isSpectating = true;
+                    localCar.speed = 0;
+                    uiOverlay.innerText = 'Finished!';
+                    setTimeout(() => { if (uiOverlay.innerText === 'Finished!') uiOverlay.innerText = ''; }, 1200);
+                }
+            }
+        }
+        lastTrackProgress = progress;
+    }
+
+    function chooseSpectateTarget() {
+        if (!isSpectating) return localCar;
+        if (spectateTargetId && remoteCars.has(spectateTargetId)) {
+            return remoteCars.get(spectateTargetId);
+        }
+
+        for (const [id, car] of remoteCars.entries()) {
+            const data = network.players.get(id);
+            if (data && !data.finished) {
+                spectateTargetId = id;
+                return car;
+            }
+        }
+
+        const first = remoteCars.values().next().value;
+        return first || localCar;
     }
 
     function startMusic(offset = 0) {
@@ -479,6 +681,8 @@ async function init() {
             lastAudioTime = currentAudioTime;
         }
 
+        updateFinishTimerHud();
+
         // ===========================
         // REAL-TIME REACTIVITY (SMOOTH)
         // ===========================
@@ -520,15 +724,23 @@ async function init() {
 
         // LOCAL CAR
         if (localCar) {
-            localCar.update(dt, { trackCurve, frames: frenetFrames, canMove: true });
+            const canDrive = gameState === 'PLAYING' && !isSpectating;
+            localCar.update(dt, { trackCurve, frames: frenetFrames, canMove: canDrive });
+
+            if (gameState === 'PLAYING' && raceActive && canDrive) {
+                handleLapProgress();
+            } else if (!raceActive) {
+                lastTrackProgress = localCar.trackProgress;
+            }
 
             // Camera Chase
-            const carPos = localCar.mesh.position;
-            const carQuat = localCar.mesh.quaternion;
+            const cameraCar = chooseSpectateTarget();
+            const cameraPos = cameraCar ? cameraCar.mesh.position : localCar.mesh.position;
+            const cameraQuat = cameraCar ? cameraCar.mesh.quaternion : localCar.mesh.quaternion;
 
             // Base offset
             const offset = new THREE.Vector3(0, 5, -10);
-            offset.applyQuaternion(carQuat);
+            offset.applyQuaternion(cameraQuat);
 
             // Apply free look rotation
             if (isFreeLook) {
@@ -536,21 +748,21 @@ async function init() {
                 offset.y += camLat * 5;
             }
 
-            const idealPos = carPos.clone().add(offset).add(shake);
-            const idealLook = carPos.clone().add(new THREE.Vector3(0, 2, 0));
+            const idealPos = cameraPos.clone().add(offset).add(shake);
+            const idealLook = cameraPos.clone().add(new THREE.Vector3(0, 2, 0));
 
             graphics.camera.position.lerp(idealPos, dt * 5.0);
             graphics.camera.lookAt(idealLook);
 
             // FOV Boost
-            const targetFOV = (localCar.keys.shift && localCar.speed > 50) ? 90 : 75;
+            const targetFOV = (!isSpectating && localCar.keys.shift && localCar.speed > 50) ? 90 : 75;
             graphics.camera.fov = THREE.MathUtils.lerp(graphics.camera.fov, targetFOV, dt * 2);
             graphics.camera.updateProjectionMatrix();
 
             // Network Sync
             network.sendUpdate({
-                x: carPos.x, y: carPos.y, z: carPos.z,
-                qx: carQuat.x, qy: carQuat.y, qz: carQuat.z, qw: carQuat.w,
+                x: localCar.mesh.position.x, y: localCar.mesh.position.y, z: localCar.mesh.position.z,
+                qx: localCar.mesh.quaternion.x, qy: localCar.mesh.quaternion.y, qz: localCar.mesh.quaternion.z, qw: localCar.mesh.quaternion.w,
                 velocity: localCar.speed
             });
         }

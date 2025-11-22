@@ -6,6 +6,7 @@ export class Network {
         this.players = new Map();
         this.songs = [];
         this.selectedSong = null;
+        this.maxLaps = 3;
 
         // Callbacks
         this.onPlayerJoined = null;
@@ -14,6 +15,10 @@ export class Network {
         this.onCountdown = null;
         this.onInit = null;
         this.onLobbyUpdate = null; // New
+        this.onPrepareRace = null;
+        this.onLapUpdate = null;
+        this.onFinishTimer = null;
+        this.onRaceOver = null;
     }
 
     connect() {
@@ -33,6 +38,7 @@ export class Network {
                     this.id = data.id;
                     this.songs = data.songs;
                     this.selectedSong = data.selectedSong;
+                    this.maxLaps = data.maxLaps || this.maxLaps;
                     this.updatePlayers(data.players);
 
                     if (this.onGameStateChange) this.onGameStateChange(data.gameState, data.musicStartTime);
@@ -53,6 +59,12 @@ export class Network {
                     if (this.onLobbyUpdate) this.onLobbyUpdate(data.players, data.votes);
                     break;
 
+                case 'prepare_race':
+                    this.selectedSong = data.selectedSong;
+                    this.maxLaps = data.maxLaps || this.maxLaps;
+                    if (this.onPrepareRace) this.onPrepareRace(data);
+                    break;
+
                 case 'state':
                     this.updatePlayers(data.players);
                     break;
@@ -64,7 +76,23 @@ export class Network {
 
                 case 'game_start':
                     this.selectedSong = data.selectedSong;
+                    this.maxLaps = data.maxLaps || this.maxLaps;
                     if (this.onGameStateChange) this.onGameStateChange('PLAYING', data.musicStartTime);
+                    break;
+
+                case 'lap_update':
+                    if (data.player) {
+                        this.updatePlayers([data.player]);
+                        if (this.onLapUpdate) this.onLapUpdate(data.player);
+                    }
+                    break;
+
+                case 'finish_timer':
+                    if (this.onFinishTimer) this.onFinishTimer(data.endsAt, data.triggeredBy);
+                    break;
+
+                case 'race_over':
+                    if (this.onRaceOver) this.onRaceOver(data.results, data.endsAt);
                     break;
 
                 case 'game_reset':
@@ -107,6 +135,14 @@ export class Network {
 
     sendReady(isReady) {
         this.send({ type: 'player_ready', isReady });
+    }
+
+    sendAssetsReady() {
+        this.send({ type: 'assets_ready' });
+    }
+
+    sendLapUpdate(lap, lapTime, totalTime) {
+        this.send({ type: 'lap_update', lap, lapTime, totalTime });
     }
 
     sendUpdate(state) {

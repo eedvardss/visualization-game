@@ -6,6 +6,13 @@ export class Car {
         this.scene = scene;
         this.isLocal = isLocal;
         this.name = name;
+        this.modelName = modelName;
+
+        // Resolve when the visual mesh is ready so the game can wait on it
+        this._readyResolved = false;
+        this.readyPromise = new Promise((resolve) => {
+            this._resolveReady = resolve;
+        });
 
         this.mesh = new THREE.Group();
         this.scene.add(this.mesh);
@@ -36,6 +43,7 @@ export class Car {
                 });
 
                 this.mesh.add(model);
+                this.model = model;
 
                 // SMART WHEEL DETECTION
                 const potentialWheels = [];
@@ -68,6 +76,8 @@ export class Car {
                     console.warn('Could not auto-detect wheels. Found:', potentialWheels.map(w => w.name));
                     this.hasWheels = false;
                 }
+
+                this._markReady();
             },
             undefined,
             (err) => {
@@ -79,6 +89,7 @@ export class Car {
                 this.mesh.add(box);
                 this.model = box;
                 this.hasWheels = false;
+                this._markReady();
             }
         );
 
@@ -784,5 +795,22 @@ export class Car {
         this.updateSparks(dt);
         this.updateSkidmarks(dt);
         this.updateSpeedLines(dt);
+    }
+
+    _markReady() {
+        if (this._readyResolved) return;
+        this._readyResolved = true;
+        if (this._resolveReady) this._resolveReady();
+    }
+
+    waitForReady() {
+        return this.readyPromise;
+    }
+
+    resetForRace(trackProgress = 0, lateralOffset = 0) {
+        this.speed = 0;
+        this.headingAngle = 0;
+        this.trackProgress = trackProgress;
+        this.lateralOffset = lateralOffset;
     }
 }

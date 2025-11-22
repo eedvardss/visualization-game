@@ -3,10 +3,15 @@ const WebSocket = require('ws');
 const wss = new WebSocket.Server({ port: 8081 });
 
 const players = new Map();
-let gameState = 'WAITING'; // WAITING, COUNTDOWN, PLAYING
+let gameState = 'WAITING'; // WAITING, PREPARING, COUNTDOWN, PLAYING, FINISHED
 let countdownTimer = null;
 let musicStartTime = null;
 let selectedSong = 'Homecoming.mp3'; // Default
+
+const MAX_LAPS = 3;
+const FINISH_GRACE_MS = 10_000;
+let finishDeadline = null;
+let finishTimeout = null;
 
 // Song options available
 const AVAILABLE_SONGS = [
@@ -37,11 +42,18 @@ wss.on('connection', (ws) => {
     model: 'mercedes.glb',
     color: Math.floor(Math.random() * 16777215),
     isReady: false,
+    assetsReady: false,
     spawnIndex, // Store spawn index
     vote: null,
     x: 0, y: 0, z: 0,
     qx: 0, qy: 0, qz: 0, qw: 1,
     velocity: 0,
+    lap: 0,
+    lapTimes: [],
+    bestLap: null,
+    totalTime: 0,
+    finished: false,
+    finishTime: null,
     ws: ws
   });
 
@@ -53,7 +65,8 @@ wss.on('connection', (ws) => {
     gameState,
     musicStartTime,
     selectedSong,
-    songs: AVAILABLE_SONGS
+    songs: AVAILABLE_SONGS,
+    maxLaps: MAX_LAPS
   }));
 
   broadcastLobbyUpdate();
@@ -82,6 +95,8 @@ wss.on('connection', (ws) => {
 
         case 'player_ready':
           player.isReady = data.isReady;
+          // force re-confirmation of asset load after toggling ready
+          player.assetsReady = false;
           broadcastLobbyUpdate();
           checkGameStart();
           break;
@@ -93,6 +108,17 @@ wss.on('connection', (ws) => {
               qx: data.qx, qy: data.qy, qz: data.qz, qw: data.qw,
               velocity: data.velocity
             });
+          }
+          break;
+
+        case 'assets_ready':
+          player.assetsReady = true;
+          checkAssetsReady();
+          break;
+
+        case 'lap_update':
+          if (gameState === 'PLAYING') {
+            handleLapUpdate(player, data);
           }
           break;
       }
@@ -115,11 +141,18 @@ function getPublicPlayerList() {
     model: p.model,
     color: p.color,
     isReady: p.isReady,
+    assetsReady: p.assetsReady,
     spawnIndex: p.spawnIndex, // Send spawn index to clients
     vote: p.vote,
     x: p.x, y: p.y, z: p.z,
     qx: p.qx, qy: p.qy, qz: p.qz, qw: p.qw,
-    velocity: p.velocity
+    velocity: p.velocity,
+    lap: p.lap,
+    lapTimes: p.lapTimes,
+    bestLap: p.bestLap,
+    totalTime: p.totalTime,
+    finished: p.finished,
+    finishTime: p.finishTime
   }));
 }
 
@@ -147,7 +180,7 @@ function checkGameStart() {
   const allReady = Array.from(players.values()).every(p => p.isReady);
 
   if (allReady) {
-    startCountdown();
+    startPreparation();
   }
 }
 
@@ -157,9 +190,21 @@ function checkGameStop() {
     gameState = 'WAITING';
     musicStartTime = null;
     if (countdownTimer) clearTimeout(countdownTimer);
+    if (finishTimeout) clearTimeout(finishTimeout);
+    finishTimeout = null;
+    finishDeadline = null;
 
     // Reset ready status
-    players.forEach(p => p.isReady = false);
+    players.forEach(p => {
+      p.isReady = false;
+      p.assetsReady = false;
+      p.lap = 0;
+      p.lapTimes = [];
+      p.bestLap = null;
+      p.totalTime = 0;
+      p.finished = false;
+      p.finishTime = null;
+    });
 
     broadcast({
       type: 'game_reset',
@@ -188,11 +233,46 @@ function determineSong() {
   return winner;
 }
 
+function startPreparation() {
+  if (gameState !== 'WAITING') return;
+  gameState = 'PREPARING';
+
+  selectedSong = determineSong();
+  finishDeadline = null;
+  if (finishTimeout) clearTimeout(finishTimeout);
+  finishTimeout = null;
+
+  players.forEach(p => {
+    p.assetsReady = false;
+    p.lap = 0;
+    p.lapTimes = [];
+    p.bestLap = null;
+    p.totalTime = 0;
+    p.finished = false;
+    p.finishTime = null;
+  });
+
+  broadcast({
+    type: 'prepare_race',
+    selectedSong,
+    maxLaps: MAX_LAPS
+  });
+}
+
+function checkAssetsReady() {
+  if (gameState !== 'PREPARING') return;
+  const everyoneReady = Array.from(players.values()).every(p => p.isReady && p.assetsReady);
+  if (everyoneReady) {
+    startCountdown();
+  }
+}
+
 function startCountdown() {
   if (gameState === 'COUNTDOWN') return;
   gameState = 'COUNTDOWN';
 
-  selectedSong = determineSong();
+  // if somehow preparing was skipped, pick song here
+  if (!selectedSong) selectedSong = determineSong();
   console.log(`Starting countdown... Selected song: ${selectedSong}`);
 
   broadcast({
@@ -211,11 +291,110 @@ function startGame() {
   musicStartTime = Date.now() + 1000;
   console.log('Game started!');
 
+  finishDeadline = null;
+  if (finishTimeout) clearTimeout(finishTimeout);
+  finishTimeout = null;
+
   broadcast({
     type: 'game_start',
     musicStartTime,
-    selectedSong
+    selectedSong,
+    maxLaps: MAX_LAPS
   });
+}
+
+function handleLapUpdate(player, data) {
+  const { lap, lapTime, totalTime } = data;
+  if (typeof lap !== 'number' || lap <= player.lap) return;
+
+  player.lap = lap;
+  if (typeof lapTime === 'number') {
+    player.lapTimes[lap - 1] = lapTime;
+  }
+  if (typeof totalTime === 'number') {
+    player.totalTime = totalTime;
+  }
+
+  // compute best lap
+  player.bestLap = player.lapTimes.reduce((best, t) => {
+    if (typeof t !== 'number') return best;
+    if (best === null || t < best) return t;
+    return best;
+  }, null);
+
+  broadcast({
+    type: 'lap_update',
+    player: {
+      id: player.id,
+      lap: player.lap,
+      lapTime,
+      totalTime: player.totalTime,
+      bestLap: player.bestLap,
+      finished: player.finished
+    }
+  });
+
+  if (player.lap >= MAX_LAPS && !player.finished) {
+    player.finished = true;
+    player.finishTime = Date.now();
+    checkFinishConditions(player.id);
+  }
+}
+
+function checkFinishConditions(triggeredBy) {
+  const everyoneDone = Array.from(players.values()).every(p => p.finished || p.lap >= MAX_LAPS);
+  if (everyoneDone) {
+    endRace();
+    return;
+  }
+
+  if (finishTimeout) return;
+  finishDeadline = Date.now() + FINISH_GRACE_MS;
+  finishTimeout = setTimeout(() => endRace(), FINISH_GRACE_MS);
+
+  broadcast({
+    type: 'finish_timer',
+    endsAt: finishDeadline,
+    triggeredBy
+  });
+}
+
+function endRace() {
+  if (gameState === 'FINISHED') return;
+  gameState = 'FINISHED';
+  if (countdownTimer) clearTimeout(countdownTimer);
+  countdownTimer = null;
+
+  const results = getPublicPlayerList().map(p => ({
+    id: p.id,
+    username: p.username,
+    model: p.model,
+    color: p.color,
+    lap: p.lap,
+    lapTimes: p.lapTimes,
+    bestLap: p.bestLap,
+    totalTime: p.totalTime,
+    finished: p.finished
+  }));
+
+  broadcast({
+    type: 'race_over',
+    results,
+    endsAt: finishDeadline
+  });
+
+  finishDeadline = null;
+  if (finishTimeout) clearTimeout(finishTimeout);
+  finishTimeout = null;
+
+  // reset lobby state for next round
+  gameState = 'WAITING';
+  musicStartTime = null;
+  players.forEach(p => {
+    p.isReady = false;
+    p.assetsReady = false;
+  });
+  broadcastLobbyUpdate();
 }
 
 function broadcast(data, excludeWs) {

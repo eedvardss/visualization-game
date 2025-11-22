@@ -439,4 +439,9 @@ export class LobbyUI {
     hide() {
         this.dom.root.style.display = 'none';
     }
+
+    show() {
+        this.dom.root.style.display = 'flex';
+        this.dom.root.style.opacity = '1';
+    }
 }
