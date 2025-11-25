@@ -1,6 +1,8 @@
 const WebSocket = require('ws');
 
-const wss = new WebSocket.Server({ port: 8081 });
+// Allow platform-provided PORT (Render, Railway, etc.) with local fallback
+const PORT = process.env.PORT || 8081;
+const wss = new WebSocket.Server({ port: PORT });
 
 const players = new Map();
 let gameState = 'WAITING'; // WAITING, PREPARING, COUNTDOWN, PLAYING, FINISHED
@@ -417,4 +419,4 @@ setInterval(() => {
   }
 }, 50);
 
-console.log('WebSocket server running on port 8081');
+console.log(`WebSocket server running on port ${PORT}`);
